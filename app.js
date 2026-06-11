@@ -41,19 +41,28 @@ const CONFIG = {
   spawnBatch: 25,
   maxPopulation: 800,
 
+  // --- ENERGY ECONOMY (sensitive — read before tuning) ---
+  // Out: every cell loses energyDecayPerSec each second.
+  // In : the dish receives nutrientRate * nutrientEnergy energy/sec (food is the ONLY
+  //      real energy source — division just splits existing energy, see reproEfficiency).
+  // Carrying capacity  N* = (nutrientRate * nutrientEnergy) / energyDecayPerSec.
+  //   Defaults: (30 * 30) / 4 = 225 cells.  Start = 60 < 225  => colony grows then self-limits.
+  //   Time to starve from full with no food = startEnergy / energyDecayPerSec = 60/4 = 15 s.
+  // To make floods deadlier, raise floodDamage; to thin the colony, lower nutrientRate.
+
   // bacteria
   bactRadius: 3.4,
-  startEnergy: 45,
-  divideThreshold: 100,
-  divideCost: 55,        // energy retained split between parent & child
-  energyDecayPerSec: 6,  // baseline metabolism
-  jitter: 26,            // random-walk acceleration (px/s^2-ish)
-  maxSpeed: 34,          // px/s
+  startEnergy: 60,         // energy a fresh/seeded cell begins with (15 s starve buffer)
+  divideThreshold: 100,    // energy at which a cell divides (the repro trigger)
+  reproEfficiency: 1.0,    // fraction of energy kept across division (1.0 = conserved)
+  energyDecayPerSec: 4,    // baseline metabolism — energy out per cell per second
+  jitter: 26,              // random-walk acceleration (px/s^2-ish)
+  maxSpeed: 34,            // px/s
   drag: 0.86,
-  lifespanMin: 14,       // seconds
+  lifespanMin: 14,         // seconds
   lifespanMax: 30,
-  nutrientEnergy: 28,
-  eatRadius: 6,
+  nutrientEnergy: 30,      // energy gained per nutrient eaten
+  eatRadius: 8,            // center-to-center distance at which a cell consumes a nutrient
 
   // genetics (mutationRate set live from slider, as a fraction 0..1 per division)
   mutationRate: 0.02,
@@ -63,9 +72,9 @@ const CONFIG = {
   plasmidLifespan: 16,      // seconds before it degrades
   plasmidPickupRadius: 7,
 
-  // nutrients (rate set live from slider — units: nutrients/sec per 1000px area scale)
-  nutrientRate: 6,
-  maxNutrients: 900,
+  // nutrients (rate set live from slider — nutrients spawned per second across the dish)
+  nutrientRate: 30,        // supply * nutrientEnergy = 900 energy/s -> carrying capacity 225
+  maxNutrients: 1200,      // standing food buffer cap so small colonies don't supply-starve
 
   // antibiotics
   floodDuration: 7,     // seconds the drug lingers
@@ -201,7 +210,8 @@ class SpatialGrid {
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const bucket = this.map.get((cy + dy) * this.cols + (cx + dx));
-        if (bucket) out.push(...bucket);
+        // direct copy (no spread) — hot path, called per-bacterium per-step for both grids
+        if (bucket) for (let i = 0; i < bucket.length; i++) out.push(bucket[i]);
       }
     }
     return out;
@@ -328,7 +338,6 @@ function update(dt) {
 
     // reproduction
     if (b.energy >= CONFIG.divideThreshold && state.bacteria.length + births.length < CONFIG.maxPopulation) {
-      b.energy -= CONFIG.divideCost;
       const childGenes = { ...b.resistanceGenes };
 
       // mutation roll per gene
@@ -345,8 +354,13 @@ function update(dt) {
         b.y + Math.sin(angle) * 5,
         childGenes
       );
-      child.energy = CONFIG.divideCost * 0.5;
-      b.energy *= 0.5 + 0.5 * (CONFIG.divideCost / CONFIG.divideThreshold);
+      // Split the parent's energy evenly between the two daughter cells.
+      // reproEfficiency models the metabolic cost of replication: 1.0 conserves energy
+      // exactly; <1.0 burns a fraction on division. Because food stays the only true
+      // energy input, carrying capacity remains supply/decay regardless of this factor.
+      const shared = b.energy * CONFIG.reproEfficiency;
+      b.energy = shared / 2;
+      child.energy = shared / 2;
       births.push(child);
     }
 
