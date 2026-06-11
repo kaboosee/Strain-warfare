@@ -16,6 +16,19 @@
     <!-- ============ LEFT SIDEBAR: CONTROLS ============ -->
     <aside class="sidebar sidebar-left">
       <section class="panel">
+        <h2>Scenario Presets</h2>
+        <div class="preset-row">
+          <select id="presetSelect">
+            <option value="baseline">🧪 Baseline Colony</option>
+            <option value="megaplate">🧬 MEGA-plate (Kishony)</option>
+            <option value="superbug">☠ Superbug Outbreak</option>
+            <option value="famine">🍽 Famine</option>
+          </select>
+          <button class="btn" id="btnPreset">▶ Load</button>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Parameters</h2>
 
         <div class="control">
@@ -62,22 +75,49 @@
         <button class="btn btn-ghost" id="btnPause">⏸ Pause</button>
       </section>
 
-      <section class="panel legend">
-        <h2>Legend</h2>
-        <ul class="legend-list">
-          <li><span class="swatch" style="background:#7fbf7f"></span> Susceptible</li>
-          <li><span class="swatch" style="background:#4ea3ff"></span> Penicillin-R</li>
-          <li><span class="swatch" style="background:#ffb648"></span> Tetracycline-R</li>
-          <li><span class="swatch" style="background:#e472ff"></span> Cipro-R</li>
-          <li><span class="swatch ring"></span> Floating plasmid</li>
-          <li><span class="swatch glow"></span> Efflux active</li>
-        </ul>
+      <section class="panel">
+        <details class="glossary">
+          <summary>📖 Glossary — what the terms mean</summary>
+          <dl>
+            <dt>Antimicrobial resistance (AMR)</dt>
+            <dd>When bacteria evolve to survive a drug that used to kill them.</dd>
+            <dt>Susceptible</dt>
+            <dd>A cell with no resistance — any antibiotic flooding its area kills it fast.</dd>
+            <dt>Resistance gene</dt>
+            <dd>A gene that lets a cell survive ONE specific antibiotic. Each drug has its own.</dd>
+            <dt>Multi-drug resistance (MDR / “superbug”)</dt>
+            <dd>A cell carrying several resistance genes at once — survives several drugs.</dd>
+            <dt>Efflux pump</dt>
+            <dd>A molecular pump that ejects the antibiotic from the cell. How a resistant cell
+              survives a flood — it glows while pumping and spends energy to do it.</dd>
+            <dt>Mutation</dt>
+            <dd>A random gene change when a cell divides — how brand-new resistance first appears.</dd>
+            <dt>Plasmid &amp; horizontal gene transfer (HGT)</dt>
+            <dd>A ring of DNA a dead resistant cell leaves behind. A living cell that touches it
+              picks up the gene — resistance spreading sideways, without reproduction.</dd>
+            <dt>Fitness cost</dt>
+            <dd>Carrying resistance burns extra energy every second, so resistant cells lose out
+              when no drug is present. That’s why resistance stays rare until you apply a drug.</dd>
+            <dt>MIC (minimum inhibitory concentration)</dt>
+            <dd>The lowest drug dose that stops a susceptible cell growing. In the MEGA-plate the
+              bands are multiples of MIC (1×, 10×, 100×, 1000×).</dd>
+          </dl>
+        </details>
       </section>
+
     </aside>
 
     <!-- ============ CANVAS ============ -->
     <section class="stage">
       <canvas id="dish" width="800" height="800"></canvas>
+      <ul class="legend-list legend-overlay">
+        <li title="No resistance genes. Dies within seconds if its area is flooded with any antibiotic."><span class="swatch" style="background:#7fbf7f"></span> Susceptible</li>
+        <li title="Carries the penicillin-resistance gene: survives a penicillin flood (but not other drugs)."><span class="swatch" style="background:#4ea3ff"></span> Penicillin-R</li>
+        <li title="Carries the tetracycline-resistance gene: survives a tetracycline flood (but not other drugs)."><span class="swatch" style="background:#ffb648"></span> Tetracycline-R</li>
+        <li title="Carries the ciprofloxacin-resistance gene: survives a cipro flood (but not other drugs)."><span class="swatch" style="background:#e472ff"></span> Cipro-R</li>
+        <li title="A loose ring of DNA dropped by a dead resistant cell. A living cell that touches it absorbs the gene — resistance spreading WITHOUT reproduction (horizontal gene transfer)."><span class="swatch ring"></span> Floating plasmid</li>
+        <li title="This resistant cell is actively pumping the antibiotic back out of itself to survive the flood — at an energy cost. (Blended colours = multi-drug-resistant 'superbug'.)"><span class="swatch glow"></span> Efflux active</li>
+      </ul>
       <div id="tooltip" class="tooltip" hidden></div>
     </section>
 
@@ -86,11 +126,11 @@
       <section class="panel">
         <h2>Live Stats</h2>
         <div class="stat-grid">
-          <div class="stat"><span class="stat-num" id="statLiving">0</span><span class="stat-label">Living</span></div>
-          <div class="stat"><span class="stat-num" id="statResistant">0</span><span class="stat-label">Resistant <span class="stat-hint">(≥1 gene)</span></span></div>
-          <div class="stat"><span class="stat-num" id="statMultiResistant">0</span><span class="stat-label">Multi-resistant <span class="stat-hint">(≥2 genes)</span></span></div>
-          <div class="stat"><span class="stat-num" id="statPlasmids">0</span><span class="stat-label">Plasmids</span></div>
-          <div class="stat"><span class="stat-num" id="statNutrients">0</span><span class="stat-label">Nutrients</span></div>
+          <div class="stat" title="Total bacteria currently alive in the dish."><span class="stat-num" id="statLiving">0</span><span class="stat-label">Living</span></div>
+          <div class="stat" title="Cells carrying at least one resistance gene — they survive at least one antibiotic."><span class="stat-num" id="statResistant">0</span><span class="stat-label">Resistant <span class="stat-hint">(≥1 gene)</span></span></div>
+          <div class="stat" title="Multi-drug-resistant 'superbugs': cells carrying 2+ resistance genes at once."><span class="stat-num" id="statMultiResistant">0</span><span class="stat-label">Multi-resistant <span class="stat-hint">(≥2 genes)</span></span></div>
+          <div class="stat" title="Floating rings of DNA (from dead resistant cells) that spread resistance by horizontal gene transfer."><span class="stat-num" id="statPlasmids">0</span><span class="stat-label">Plasmids</span></div>
+          <div class="stat" title="Food particles in the dish. Cells eat these for energy; division and survival depend on it."><span class="stat-num" id="statNutrients">0</span><span class="stat-label">Nutrients</span></div>
         </div>
 
         <h3 class="breakdown-title">Resistance by gene</h3>

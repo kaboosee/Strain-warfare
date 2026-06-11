@@ -62,7 +62,13 @@ const CONFIG = {
                           //   damp velocity to ~zero each tick so cells barely move and
                           //   cannot forage. ~0.97 lets motion persist so they actually feed.
   chemotaxis: 14,         // accel bias toward the nearest sensed nutrient (foraging drive)
-  senseRadius: 26,        // how far a cell can "smell" a nutrient to swim toward it
+  // How far a cell can "smell" a nutrient to swim toward it. Too small (≈26) and cells that
+  // have eaten their local patch can't find the food that's piled up elsewhere — the colony
+  // starves locally and can DIE OUT even while global nutrients are in surplus (especially
+  // when confined by a gradient, or at low supply). Must be ≤ the nutrient grid's cell size
+  // (nutrientGrid below) or the 3×3 query clips it. Verified headless: 26 → low-supply
+  // extinction; ≈44 keeps the colony alive and tightens the boom/bust swings.
+  senseRadius: 44,
   lifespanMin: 14,         // seconds
   lifespanMax: 30,
   nutrientEnergy: 30,      // energy gained per nutrient eaten
@@ -90,10 +96,16 @@ const CONFIG = {
   maxNutrients: 1200,      // standing food buffer cap so small colonies don't supply-starve
 
   // antibiotics
-  floodDuration: 7,     // seconds the drug lingers
+  // floodDuration is the drain WINDOW for cells under the drug. It was 7s with a 9/s efflux
+  // tax, which (on top of base metabolism + resistance cost) drained resistant cells faster
+  // than they could eat over the window, so ~80% of RESISTANT cells starved during a flood —
+  // resistance looked broken. Now a short, sharp pulse (4s) with a small efflux tax (2/s):
+  // susceptibles still die almost instantly at floodDamage 70/s, but resistant cells reliably
+  // ride it out (verified headless: ~17% -> ~72% resistant survival, susceptibles still wiped).
+  floodDuration: 4,     // seconds the drug lingers
   floodSweep: 1.1,      // seconds for the front to cross the dish
   floodDamage: 70,      // energy/sec drained from susceptible cells under the drug
-  effluxCost: 9,        // extra energy/sec resistant cells pay to pump it out
+  effluxCost: 2,        // extra energy/sec resistant cells pay to pump it out (modest tax)
 
   // --- MEGA-PLATE GRADIENT (Kishony 2016) ---
   // A standing spatial gradient of ONE drug instead of a transient sweep. The dish is
@@ -112,11 +124,45 @@ const CONFIG = {
   // eating — otherwise well-fed susceptibles survive bands above their MIC, which is wrong.
   // Anchored at floodDamage so band 1× is "at/above MIC = inhibitory", scaling deeper in.
   gradientKill: 70,       // energy/s per (log10 conc + 1) drained from susceptibles in a band
-  gradientEffluxScale: 0.6, // efflux tax multiplier per (log10 conc + 1) for resistant cells
+  // Decoupled from the flood effluxCost: the gradient wants a STEEP per-dose tax so the front
+  // advances band-by-band (high bands survivable but costly). Tuned so effluxCost*scale*dose
+  // matches the old gradient cost even though the flood effluxCost was lowered.
+  gradientEffluxScale: 2.7, // efflux tax multiplier per (log10 conc + 1) for resistant cells
 
   // simulation
   simSpeed: 1,
   fixedDt: 1 / 60,      // physics step
+};
+
+// Scenario presets. Each one resets the world, sets the three sliders, seeds a colony
+// (optionally with some pre-resistant founders), and may switch on a gradient. The `seed`
+// fields: count = founders, resistantFrac = share that start resistant, genesPerResistant =
+// how many genes each of those carries.
+const PRESETS = {
+  baseline: {
+    label: '🧪 Baseline Colony',
+    blurb: 'A healthy colony, no drugs — watch it grow to carrying capacity.',
+    mutation: 1.0, nutrient: 30, speed: 1,
+    seed: { count: 60 },
+  },
+  megaplate: {
+    label: '🧬 MEGA-plate (Kishony)',
+    blurb: 'Standing ciprofloxacin gradient. Resistance must evolve to cross the bands.',
+    mutation: 1.5, nutrient: 36, speed: 1.5, gradient: 'cipro',
+    seed: { count: 90 },
+  },
+  superbug: {
+    label: '☠ Superbug Outbreak',
+    blurb: 'A few multi-drug-resistant founders seeded among susceptibles — watch MDR spread.',
+    mutation: 1.0, nutrient: 30, speed: 1,
+    seed: { count: 70, resistantFrac: 0.12, genesPerResistant: 2 },
+  },
+  famine: {
+    label: '🍽 Famine',
+    blurb: 'Scarce food — fierce competition and boom/bust, but the colony hangs on.',
+    mutation: 1.5, nutrient: 12, speed: 1,
+    seed: { count: 80 },
+  },
 };
 
 /* ============================================================
@@ -133,6 +179,7 @@ const state = {
   paused: false,
   nutrientAccumulator: 0,
   mutationsThisWindow: 0, // batched so the ledger isn't spammed
+  hgtThisWindow: 0,       // batched HGT (plasmid uptake) events for the ledger
   gradient: null,         // { gene } when a MEGA-plate gradient is active, else null
   history: [],            // ring buffer of {living,penPct,tetPct,cipPct} samples for the chart
   hovered: null,          // bacterium currently under the cursor (cell inspector)
@@ -201,16 +248,17 @@ function countGenes(b) {
        + (b.resistanceGenes.cipro ? 1 : 0);
 }
 
-// Blend a bacterium's color from the resistance genes it carries.
-function bacteriumColor(b) {
-  const active = GENES.filter(g => b.resistanceGenes[g]);
-  if (active.length === 0) return [127, 191, 127]; // susceptible grey-green
-  let r = 0, g = 0, bl = 0;
-  for (const gene of active) {
-    const c = ANTIBIOTICS[gene].rgb;
-    r += c[0]; g += c[1]; bl += c[2];
-  }
-  return [r / active.length, g / active.length, bl / active.length];
+// Cache a bacterium's render colour (blended from its resistance genes) onto b.cr/cg/cb.
+// Called once at creation and again only when genes change in life (HGT) — so render never
+// recomputes or allocates a colour array per cell per frame.
+function setColor(b) {
+  const g = b.resistanceGenes;
+  let n = 0, r = 0, gg = 0, bl = 0;
+  if (g.penicillin)   { const c = ANTIBIOTICS.penicillin.rgb;   r += c[0]; gg += c[1]; bl += c[2]; n++; }
+  if (g.tetracycline) { const c = ANTIBIOTICS.tetracycline.rgb; r += c[0]; gg += c[1]; bl += c[2]; n++; }
+  if (g.cipro)        { const c = ANTIBIOTICS.cipro.rgb;        r += c[0]; gg += c[1]; bl += c[2]; n++; }
+  if (n === 0) { b.cr = 127; b.cg = 191; b.cb = 127; } // susceptible grey-green
+  else { b.cr = r / n; b.cg = gg / n; b.cb = bl / n; }
 }
 
 /* ============================================================
@@ -218,7 +266,7 @@ function bacteriumColor(b) {
    ============================================================ */
 
 function createBacterium(x, y, genes = null) {
-  return {
+  const b = {
     x, y,
     vx: rand(-8, 8),
     vy: rand(-8, 8),
@@ -231,7 +279,10 @@ function createBacterium(x, y, genes = null) {
     plasmidSlots: 1,   // how many plasmids it can still absorb
     efflux: 0,         // >0 means actively pumping (decays for the visual glow)
     dead: false,
+    cr: 0, cg: 0, cb: 0, // cached render colour (set below; refreshed on HGT)
   };
+  setColor(b);
+  return b;
 }
 
 function createNutrient(x, y) {
@@ -265,8 +316,9 @@ class SpatialGrid {
     this.map = new Map();
   }
   _key(x, y) {
-    const cx = Math.floor(x / this.cellSize);
-    const cy = Math.floor(y / this.cellSize);
+    // clamp negative coords defensively so an out-of-bounds entity can't alias another cell
+    const cx = x > 0 ? Math.floor(x / this.cellSize) : 0;
+    const cy = y > 0 ? Math.floor(y / this.cellSize) : 0;
     return cy * this.cols + cx;
   }
   clear() { this.map.clear(); }
@@ -276,15 +328,16 @@ class SpatialGrid {
     if (!bucket) { bucket = []; this.map.set(k, bucket); }
     bucket.push(entity);
   }
-  // Return all entities in the 3x3 block of cells around (x, y).
-  queryNearby(x, y) {
-    const cx = Math.floor(x / this.cellSize);
-    const cy = Math.floor(y / this.cellSize);
-    const out = [];
+  // Fill `out` with the entities in the 3x3 block of cells around (x, y) and return it.
+  // Takes a caller-owned scratch array (reset to length 0 here) so the per-bacterium hot
+  // path allocates nothing — queryNearby used to return a fresh array on every call.
+  queryInto(x, y, out) {
+    out.length = 0;
+    const cx = x > 0 ? Math.floor(x / this.cellSize) : 0;
+    const cy = y > 0 ? Math.floor(y / this.cellSize) : 0;
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const bucket = this.map.get((cy + dy) * this.cols + (cx + dx));
-        // direct copy (no spread) — hot path, called per-bacterium per-step for both grids
         if (bucket) for (let i = 0; i < bucket.length; i++) out.push(bucket[i]);
       }
     }
@@ -292,8 +345,12 @@ class SpatialGrid {
   }
 }
 
-const nutrientGrid = new SpatialGrid(20);
+// nutrient grid cell >= senseRadius so the 3×3 query fully covers a cell's sense range
+const nutrientGrid = new SpatialGrid(44);
 const plasmidGrid = new SpatialGrid(16);
+// reusable scratch buffers for queryInto — refilled per cell, never reallocated
+const _nutScratch = [];
+const _plasScratch = [];
 
 /* ============================================================
    6. SIMULATION STEP
@@ -341,22 +398,24 @@ function update(dt) {
     b.vx += rand(-CONFIG.jitter, CONFIG.jitter) * dt * 8;
     b.vy += rand(-CONFIG.jitter, CONFIG.jitter) * dt * 8;
 
-    // chemotaxis: swim toward the nearest nutrient within sense range so cells
-    // actively forage instead of drifting. This is what makes feeding (and thus
-    // reproduction) actually happen — pure diffusion leaves cells nearly static.
-    {
-      const sensed = nutrientGrid.queryNearby(b.x, b.y);
-      let best = null, bestD = CONFIG.senseRadius * CONFIG.senseRadius;
-      for (const n of sensed) {
-        if (n.eaten) continue;
-        const d = dist2(b.x, b.y, n.x, n.y);
-        if (d < bestD) { bestD = d; best = n; }
-      }
-      if (best) {
-        const d = Math.sqrt(bestD) || 1;
-        b.vx += ((best.x - b.x) / d) * CONFIG.chemotaxis * dt * 8;
-        b.vy += ((best.y - b.y) / d) * CONFIG.chemotaxis * dt * 8;
-      }
+    // Query nearby nutrients ONCE per cell (nutrient positions are static and the cell moves
+    // <1px this step, so it stays in the same grid cell). Reused for both chemotaxis here and
+    // eating after the move — halves the nutrient-grid queries and allocates nothing.
+    const near = nutrientGrid.queryInto(b.x, b.y, _nutScratch);
+
+    // chemotaxis: steer toward the nearest un-eaten nutrient within sense range so cells
+    // actively forage instead of drifting (pure diffusion leaves cells nearly static).
+    let best = null, bestD = CONFIG.senseRadius * CONFIG.senseRadius;
+    for (let i = 0; i < near.length; i++) {
+      const n = near[i];
+      if (n.eaten) continue;
+      const d = dist2(b.x, b.y, n.x, n.y);
+      if (d < bestD) { bestD = d; best = n; }
+    }
+    if (best) {
+      const d = Math.sqrt(bestD) || 1;
+      b.vx += ((best.x - b.x) / d) * CONFIG.chemotaxis * dt * 8;
+      b.vy += ((best.y - b.y) / d) * CONFIG.chemotaxis * dt * 8;
     }
 
     b.vx *= CONFIG.drag;
@@ -423,11 +482,13 @@ function update(dt) {
       }
     }
 
-    // eat nearby nutrients
-    const near = nutrientGrid.queryNearby(b.x, b.y);
-    for (const n of near) {
+    // eat nearby nutrients — reuse the same nutrient list queried above (one query per cell);
+    // distances are re-checked at the post-move position so eating still happens after moving.
+    const eatR2 = CONFIG.eatRadius * CONFIG.eatRadius;
+    for (let i = 0; i < near.length; i++) {
+      const n = near[i];
       if (n.eaten) continue;
-      if (dist2(b.x, b.y, n.x, n.y) < CONFIG.eatRadius * CONFIG.eatRadius) {
+      if (dist2(b.x, b.y, n.x, n.y) < eatR2) {
         n.eaten = true;
         b.energy += CONFIG.nutrientEnergy;
       }
@@ -435,15 +496,18 @@ function update(dt) {
 
     // HGT: absorb a nearby plasmid if susceptible to that gene and has a slot
     if (b.plasmidSlots > 0) {
-      const nearP = plasmidGrid.queryNearby(b.x, b.y);
-      for (const p of nearP) {
+      const nearP = plasmidGrid.queryInto(b.x, b.y, _plasScratch);
+      const pickR2 = CONFIG.plasmidPickupRadius * CONFIG.plasmidPickupRadius;
+      for (let i = 0; i < nearP.length; i++) {
+        const p = nearP[i];
         if (p.absorbed) continue;
         if (b.resistanceGenes[p.gene]) continue;
-        if (dist2(b.x, b.y, p.x, p.y) < CONFIG.plasmidPickupRadius * CONFIG.plasmidPickupRadius) {
+        if (dist2(b.x, b.y, p.x, p.y) < pickR2) {
           p.absorbed = true;
           b.resistanceGenes[p.gene] = true;
           b.plasmidSlots--;
-          addLedger(`Plasmid absorbed → gained ${ANTIBIOTICS[p.gene].name} resistance (HGT).`, 'hgt');
+          setColor(b);                  // genes changed — refresh cached render colour
+          state.hgtThisWindow++;        // batched to the ledger ~once/sec (see update tail)
           break;
         }
       }
@@ -497,21 +561,41 @@ function update(dt) {
   for (const child of births) state.bacteria.push(child);
   if (births.length) state.generation++;
 
-  // remove eaten nutrients & dead bacteria
-  state.nutrients = state.nutrients.filter(n => !n.eaten);
+  // remove eaten nutrients & dead bacteria by compacting each array in place — avoids
+  // allocating a fresh array every step (these are the two biggest per-step collections).
+  let nw = 0;
+  for (let i = 0; i < state.nutrients.length; i++) {
+    const n = state.nutrients[i];
+    if (!n.eaten) state.nutrients[nw++] = n;
+  }
+  state.nutrients.length = nw;
 
   const livingBefore = state.bacteria.length;
-  state.bacteria = state.bacteria.filter(b => !b.dead);
+  let bw = 0;
+  for (let i = 0; i < state.bacteria.length; i++) {
+    const b = state.bacteria[i];
+    if (!b.dead) state.bacteria[bw++] = b;
+  }
+  state.bacteria.length = bw;
 
   // colony-wipe detection
   if (livingBefore > 0 && state.bacteria.length === 0) {
     addLedger('💀 Colony wiped out — no bacteria remain.', 'wipe');
   }
 
-  // flush batched mutation count to the ledger once per ~second
-  if (state.tick % 60 === 0 && state.mutationsThisWindow > 0) {
-    addLedger(`Mutation${state.mutationsThisWindow > 1 ? 's' : ''} occurred ×${state.mutationsThisWindow} — new resistance arose.`, 'mut');
-    state.mutationsThisWindow = 0;
+  // Once-per-second housekeeping. `tick` increments every step, so this fires on every 60th
+  // tick and is NEVER skipped — even when many steps run per frame at high sim speed (a
+  // frame-gated check would miss it, which previously under-sampled the history chart).
+  if (state.tick % 60 === 0) {
+    sampleHistory();
+    if (state.mutationsThisWindow > 0) {
+      addLedger(`Mutation${state.mutationsThisWindow > 1 ? 's' : ''} occurred ×${state.mutationsThisWindow} — new resistance arose.`, 'mut');
+      state.mutationsThisWindow = 0;
+    }
+    if (state.hgtThisWindow > 0) {
+      addLedger(`Plasmid uptake ×${state.hgtThisWindow} — resistance spread by HGT.`, 'hgt');
+      state.hgtThisWindow = 0;
+    }
   }
 }
 
@@ -537,7 +621,8 @@ function render() {
   // active flood overlays (translucent colored sweeps with a leading edge)
   for (const f of state.floods) {
     const reach = f.front * CONFIG.size;
-    const fade = clamp(1 - (f.age - f.sweep) / (f.duration - f.sweep), 0.25, 1);
+    const linger = f.duration - f.sweep;        // guard: never divide by <=0 if mis-tuned
+    const fade = linger > 0 ? clamp(1 - (f.age - f.sweep) / linger, 0.25, 1) : 1;
     const [r, g, b] = ANTIBIOTICS[f.gene].rgb;
     ctx.fillStyle = `rgba(${r},${g},${b},${0.12 * fade})`;
     ctx.fillRect(0, 0, reach, CONFIG.size);
@@ -571,13 +656,15 @@ function render() {
     ctx.textAlign = 'left';
   }
 
-  // nutrients
+  // nutrients — all drawn in ONE path (one beginPath/fill instead of up to 1200) for speed.
+  // moveTo before each arc so the sub-circles don't connect with stray lines.
   ctx.fillStyle = '#5fd07a';
+  ctx.beginPath();
   for (const n of state.nutrients) {
-    ctx.beginPath();
+    ctx.moveTo(n.x + 1.6, n.y);
     ctx.arc(n.x, n.y, 1.6, 0, Math.PI * 2);
-    ctx.fill();
   }
+  ctx.fill();
 
   // plasmids — pulsing rings colored by gene
   for (const p of state.plasmids) {
@@ -597,7 +684,6 @@ function render() {
 
   // bacteria
   for (const b of state.bacteria) {
-    const [r, g, bl] = bacteriumColor(b);
     // efflux aura
     if (b.efflux > 0) {
       ctx.beginPath();
@@ -607,7 +693,7 @@ function render() {
     }
     ctx.beginPath();
     ctx.arc(b.x, b.y, CONFIG.bactRadius, 0, Math.PI * 2);
-    ctx.fillStyle = `rgb(${r | 0},${g | 0},${bl | 0})`;
+    ctx.fillStyle = `rgb(${b.cr | 0},${b.cg | 0},${b.cb | 0})`; // cached colour
     ctx.fill();
     // resistant cells get a crisp border (efflux pump indicator)
     if (hasAnyResistance(b)) {
@@ -688,6 +774,7 @@ function renderChart() {
 let lastTime = performance.now();
 let accumulator = 0;
 let fpsEMA = 60;
+let frameCount = 0;
 
 function frame(now) {
   let frameTime = (now - lastTime) / 1000;
@@ -709,8 +796,11 @@ function frame(now) {
 
   render();
 
-  // refresh stats ~4x/sec for readability
-  if (state.tick % 15 === 0 || state.paused) { updateStats(); renderChart(); }
+  // Refresh stats/chart on a FRAME cadence (~4x/sec at 60 fps) rather than a tick cadence, so
+  // the rate stays steady regardless of sim speed and is never tied to which tick a frame ends
+  // on. (History sampling lives in update() so it can't be skipped at high sim speed.)
+  frameCount++;
+  if (frameCount % 15 === 0 || state.paused) { updateStats(); renderChart(); }
 
   requestAnimationFrame(frame);
 }
@@ -724,6 +814,7 @@ function cacheEls() {
   [
     'mutationRate', 'mutationRateVal', 'nutrientRate', 'nutrientRateVal',
     'simSpeed', 'simSpeedVal',
+    'presetSelect', 'btnPreset',
     'btnSpawn', 'btnPenicillin', 'btnTetracycline', 'btnCipro',
     'btnClearPlasmids', 'btnReset', 'btnPause',
     'gradientGene', 'btnGradient',
@@ -749,11 +840,10 @@ function addLedger(msg, kind = 'info') {
 }
 
 // ---- stats ----
-function updateStats() {
-  const living = state.bacteria.length;
-  // Per-gene counts (a multi-resistant cell is counted in every gene it carries — this is
-  // the "who survives drug X" number). `resistant` = carries >=1 gene; `multi` = carries >=2.
-  // So pen+tet+cip can exceed `resistant`; the Multi-resistant stat explains that gap.
+// Single pass over the colony returning every tally the stats panel and chart need.
+// Per-gene counts include a multi-resistant cell in EVERY gene it carries (the "who survives
+// drug X" number), so pen+tet+cip can exceed `resistant`; `multi` (>=2 genes) explains the gap.
+function colonyCounts() {
   let resistant = 0, multi = 0, pen = 0, tet = 0, cip = 0;
   for (const b of state.bacteria) {
     let genes = 0;
@@ -763,9 +853,29 @@ function updateStats() {
     if (genes >= 1) resistant++;
     if (genes >= 2) multi++;
   }
+  return { living: state.bacteria.length, resistant, multi, pen, tet, cip };
+}
+
+// Push one rolling-window sample for the live chart. Called from update() on every 60th tick
+// (per-tick, so it can't be skipped at high sim speed), capped at CHART_HISTORY samples.
+function sampleHistory() {
+  const c = colonyCounts();
+  const denom = Math.max(c.living, 1);
+  state.history.push({
+    living: c.living,
+    penPct: Math.round((c.pen / denom) * 100),
+    tetPct: Math.round((c.tet / denom) * 100),
+    cipPct: Math.round((c.cip / denom) * 100),
+  });
+  if (state.history.length > CHART_HISTORY) state.history.shift();
+}
+
+function updateStats() {
+  const c = colonyCounts();
+  const living = c.living;
   els.statLiving.textContent = living;
-  els.statResistant.textContent = resistant;
-  els.statMultiResistant.textContent = multi;
+  els.statResistant.textContent = c.resistant;
+  els.statMultiResistant.textContent = c.multi;
   els.statPlasmids.textContent = state.plasmids.length;
   els.statNutrients.textContent = state.nutrients.length;
   els.statTick.textContent = `Tick ${state.tick} · Gen ${state.generation} · ${fpsEMA.toFixed(0)} FPS`;
@@ -774,19 +884,12 @@ function updateStats() {
   // the "count · %" label makes that explicit.
   const denom = Math.max(living, 1);
   const pct = n => Math.round((n / denom) * 100);
-  els.barPen.style.width = `${(pen / denom) * 100}%`;
-  els.barTet.style.width = `${(tet / denom) * 100}%`;
-  els.barCip.style.width = `${(cip / denom) * 100}%`;
-  els.cntPen.textContent = `${pen} · ${pct(pen)}%`;
-  els.cntTet.textContent = `${tet} · ${pct(tet)}%`;
-  els.cntCip.textContent = `${cip} · ${pct(cip)}%`;
-
-  // sample the rolling history for the time-series chart (~once/sec), reusing the counts
-  // already computed above so there's no second pass over the colony.
-  if (state.tick % 60 === 0) {
-    state.history.push({ living, penPct: pct(pen), tetPct: pct(tet), cipPct: pct(cip) });
-    if (state.history.length > CHART_HISTORY) state.history.shift();
-  }
+  els.barPen.style.width = `${(c.pen / denom) * 100}%`;
+  els.barTet.style.width = `${(c.tet / denom) * 100}%`;
+  els.barCip.style.width = `${(c.cip / denom) * 100}%`;
+  els.cntPen.textContent = `${c.pen} · ${pct(c.pen)}%`;
+  els.cntTet.textContent = `${c.tet} · ${pct(c.tet)}%`;
+  els.cntCip.textContent = `${c.cip} · ${pct(c.cip)}%`;
 }
 
 // ---- actions ----
@@ -803,10 +906,20 @@ function spawnBacteria(n = CONFIG.spawnBatch, staggerAge = false) {
 }
 
 function floodAntibiotic(gene) {
-  state.floods.push(createFlood(gene));
   const a = ANTIBIOTICS[gene];
-  addLedger(`💉 Flooded ${a.name} (targets ${a.target}). Susceptible cells dying.`, 'flood');
-  // Snap the stats panel to the new reality immediately — otherwise the 15-tick refresh
+  // Don't STACK floods of the same drug — that would multiply the efflux tax and wrongly
+  // starve resistant cells when the button is mashed. Instead re-arm the existing front.
+  // Different drugs still combine.
+  const existing = state.floods.find(f => f.gene === gene);
+  if (existing) {
+    existing.age = 0;
+    existing.front = 0;
+    addLedger(`💉 Re-flooded ${a.name} — the drug front resets and sweeps again.`, 'flood');
+  } else {
+    state.floods.push(createFlood(gene));
+    addLedger(`💉 Flooded ${a.name} (targets ${a.target}). Susceptible cells dying.`, 'flood');
+  }
+  // Snap the stats panel to the new reality immediately — otherwise the periodic refresh
   // can lag the fast flood die-off by up to ~0.25 s right after the user acts.
   updateStats();
 }
@@ -849,15 +962,76 @@ function resetSim() {
   state.generation = 0;
   state.nutrientAccumulator = 0;
   state.mutationsThisWindow = 0;
+  state.hgtThisWindow = 0;
   state.gradient = null;
   state.history = [];
   state.hovered = null;
+  if (els.tooltip) els.tooltip.hidden = true;
   syncGradientButton();
   els.ledger.innerHTML = '';
   // seed
   for (let i = 0; i < 40; i++) { const p = randomDishPoint(); state.nutrients.push(createNutrient(p.x, p.y)); }
   spawnBacteria(CONFIG.startPopulation, true);
   addLedger('Simulation reset. A fresh colony begins.', 'info');
+  updateStats();
+}
+
+// Load a named scenario: sync the sliders, wipe the world, and seed a tailored colony.
+function applyPreset(key) {
+  const p = PRESETS[key];
+  if (!p) return;
+
+  // sliders (DOM value + CONFIG + label all in lock-step, same as init/bindUI)
+  els.mutationRate.value = p.mutation;
+  CONFIG.mutationRate = p.mutation / 100;
+  els.mutationRateVal.textContent = `${p.mutation.toFixed(1)}%`;
+  els.nutrientRate.value = p.nutrient;
+  CONFIG.nutrientRate = p.nutrient;
+  els.nutrientRateVal.textContent = `${p.nutrient}/s`;
+  els.simSpeed.value = p.speed;
+  CONFIG.simSpeed = p.speed;
+  els.simSpeedVal.textContent = `${p.speed.toFixed(2)}×`;
+
+  // wipe world
+  state.bacteria = [];
+  state.nutrients = [];
+  state.plasmids = [];
+  state.floods = [];
+  state.gradient = null;
+  state.tick = 0;
+  state.generation = 0;
+  state.nutrientAccumulator = 0;
+  state.mutationsThisWindow = 0;
+  state.hgtThisWindow = 0;
+  state.history = [];
+  state.hovered = null;
+  if (els.tooltip) els.tooltip.hidden = true;
+  els.ledger.innerHTML = '';
+
+  // seed nutrients
+  for (let i = 0; i < 60; i++) { const q = randomDishPoint(); state.nutrients.push(createNutrient(q.x, q.y)); }
+
+  // seed founders, some pre-resistant
+  const s = p.seed;
+  for (let i = 0; i < s.count && state.bacteria.length < CONFIG.maxPopulation; i++) {
+    const q = randomDishPoint();
+    let genes = null;
+    if (s.resistantFrac && Math.random() < s.resistantFrac) {
+      genes = { penicillin: false, tetracycline: false, cipro: false };
+      const pick = [...GENES].sort(() => Math.random() - 0.5).slice(0, s.genesPerResistant || 1);
+      for (const g of pick) genes[g] = true;
+    }
+    const b = createBacterium(q.x, q.y, genes);
+    b.age = rand(0, b.lifespan * 0.6); // stagger ages so founders don't die together
+    state.bacteria.push(b);
+  }
+
+  if (p.gradient) {
+    state.gradient = { gene: p.gradient };
+    if (els.gradientGene) els.gradientGene.value = p.gradient; // keep the toggle in sync
+  }
+  syncGradientButton();
+  addLedger(`Preset loaded — ${p.label}: ${p.blurb}`, 'info');
   updateStats();
 }
 
@@ -876,6 +1050,9 @@ function bindUI() {
     CONFIG.simSpeed = parseFloat(e.target.value);
     els.simSpeedVal.textContent = `${CONFIG.simSpeed.toFixed(2)}×`;
   });
+
+  // presets
+  els.btnPreset.addEventListener('click', () => applyPreset(els.presetSelect.value));
 
   // buttons
   els.btnSpawn.addEventListener('click', () => spawnBacteria());
@@ -927,14 +1104,23 @@ function showTooltip(b, px, py) {
   if (!tip) return;
   if (!b) { tip.hidden = true; return; }
   const genes = GENES.filter(g => b.resistanceGenes[g]).map(g => ANTIBIOTICS[g].name);
-  const resLine = genes.length ? genes.join(', ') : 'Susceptible (no resistance)';
+  const resLine = genes.length ? genes.join(', ') : 'none — susceptible';
+  // plain-language footer so the inspector also teaches the terms
+  const note = b.efflux > 0
+    ? 'Efflux pump ON: actively pumping the antibiotic out to survive (burns energy).'
+    : genes.length >= 2
+      ? 'Multi-drug-resistant (MDR): carries several resistance genes — a "superbug".'
+      : genes.length === 1
+        ? 'Resistant to one drug only — still dies if flooded with a different antibiotic.'
+        : 'No resistance genes — dies within seconds if its area is flooded with any drug.';
   tip.innerHTML =
-    `<div class="tip-title">${genes.length ? 'Resistant cell' : 'Susceptible cell'}</div>` +
-    `<div><span>Resistance</span><b>${resLine}</b></div>` +
-    `<div><span>Energy</span><b>${b.energy.toFixed(0)}</b></div>` +
+    `<div class="tip-title">${genes.length ? (genes.length >= 2 ? 'Multi-resistant cell' : 'Resistant cell') : 'Susceptible cell'}</div>` +
+    `<div><span>Resists</span><b>${resLine}</b></div>` +
+    `<div><span>Energy</span><b>${b.energy.toFixed(0)} / ${CONFIG.divideThreshold} to divide</b></div>` +
     `<div><span>Age</span><b>${b.age.toFixed(1)} / ${b.lifespan.toFixed(0)} s</b></div>` +
-    `<div><span>Efflux</span><b>${b.efflux > 0 ? 'active' : 'idle'}</b></div>` +
-    `<div><span>Plasmid slots</span><b>${b.plasmidSlots}</b></div>`;
+    `<div><span>Efflux pump</span><b>${b.efflux > 0 ? 'active' : 'idle'}</b></div>` +
+    `<div><span>Plasmid slots</span><b>${b.plasmidSlots}</b></div>` +
+    `<div class="tip-note">${note}</div>`;
   tip.hidden = false;
   // position next to the cursor (coords are relative to the canvas; offset by the canvas's
   // position inside its container), flipping left near the right edge

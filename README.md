@@ -17,6 +17,19 @@ build step, no dependencies.
 Just open **`index.html`** in any modern browser (double-click it, or drag it into a
 browser tab). There is nothing to install and no server to start.
 
+## Tests
+
+The simulation has a headless, dependency-free test + benchmark suite (Node builtins only):
+
+```
+node test.mjs
+```
+
+It loads `app.js` in a sandbox with a seeded RNG (so runs are deterministic) and checks the
+invariants (no NaN, capped collections), the locked-in biology (selective sweeps, resistant
+survival, no-drug ratchet, gradient behaviour), the robustness fixes, and per-step throughput.
+Exits non-zero on any failure.
+
 ---
 
 ## AMR mechanics modelled
@@ -71,6 +84,13 @@ carrying capacity; antibiotics are the dominant cause of death.
   carrying capacity. Lower it to starve the colony, raise it to let it boom.
 - **Sim Speed** — scales how fast simulated time runs (0× pauses growth, 4× fast-forwards).
 
+### Scenario Presets (left sidebar, top)
+Pick a scenario and hit **▶ Load** to reset the dish into a tailored setup:
+- **🧪 Baseline Colony** — a healthy colony, no drugs.
+- **🧬 MEGA-plate (Kishony)** — a standing ciprofloxacin gradient; resistance must evolve to cross the bands.
+- **☠ Superbug Outbreak** — a few multi-drug-resistant founders seeded among susceptibles; watch MDR spread.
+- **🍽 Famine** — scarce food, fierce competition and boom/bust (but the colony hangs on).
+
 ### Actions (left sidebar, buttons)
 - **＋ Spawn Bacteria** — drop a fresh batch of susceptible cells into the dish.
 - **💉 Flood Penicillin / Tetracycline / Ciprofloxacin** — sweep that antibiotic across
@@ -90,7 +110,10 @@ mutations, HGT events, floods, and colony wipe-outs.
 ### Tips
 - **Click anywhere inside the dish** to seed a small cluster of bacteria at that spot.
 - **Hover any cell** to inspect it — a tooltip shows its resistance genes, energy,
-  age, efflux state, and remaining plasmid slots.
+  age, efflux state, remaining plasmid slots, and a plain-language note on what it is.
+- **Hover any item in the on-dish key** for a one-line explanation, and open the
+  **📖 Glossary** panel (left sidebar) for definitions of every biological term
+  (AMR, MDR, efflux pump, plasmid/HGT, fitness cost, MIC, …).
 
 ---
 

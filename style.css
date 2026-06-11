@@ -29,20 +29,28 @@ html, body {
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   font-size: 14px;
 }
+/* fill the viewport exactly and let inner regions (canvas, ledger) manage their own
+   overflow, so the whole app fits one screen instead of growing the page as the ledger fills */
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
 .app-header {
-  padding: 14px 24px 6px;
+  padding: 8px 24px 4px;
   text-align: center;
+  flex: 0 0 auto;
 }
 .app-header h1 {
   margin: 0;
-  font-size: 1.4rem;
+  font-size: 1.2rem;
   letter-spacing: 0.5px;
 }
 .subtitle {
-  margin: 2px 0 0;
+  margin: 1px 0 0;
   color: var(--text-dim);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
 }
 
 /* ---------- layout grid ---------- */
@@ -50,16 +58,22 @@ html, body {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr) 300px;
   gap: 16px;
-  align-items: start;
-  padding: 12px 18px 24px;
+  align-items: stretch;
+  padding: 8px 18px 14px;
   max-width: 1500px;
+  width: 100%;
   margin: 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;            /* allow the grid to shrink within the flex column */
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;        /* very short screens scroll the sidebar, not the whole page */
+  padding-right: 2px;      /* room for the scrollbar so it doesn't overlap content */
 }
 
 /* ---------- panels ---------- */
@@ -67,10 +81,10 @@ html, body {
   background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 14px;
+  padding: 10px 14px;
 }
 .panel h2 {
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 1.2px;
@@ -82,13 +96,18 @@ html, body {
   position: relative;
   display: flex;
   justify-content: center;
-  align-items: flex-start;
+  align-items: center;
+  min-height: 0;            /* let the canvas be limited by the column height */
+  overflow: hidden;
 }
 #dish {
-  width: 100%;
-  max-width: 800px;
-  aspect-ratio: 1 / 1;
+  /* keep the dish square but fit within BOTH the column width and the available height,
+     so it shrinks on shorter screens instead of forcing the page taller */
+  width: auto;
   height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1 / 1;
   border-radius: 50%;
   background: #0b0e13;
   border: 1px solid var(--border);
@@ -98,14 +117,14 @@ html, body {
 }
 
 /* ---------- controls ---------- */
-.control { margin-bottom: 14px; }
+.control { margin-bottom: 10px; }
 .control:last-child { margin-bottom: 0; }
 .control label {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   font-size: 0.82rem;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   color: var(--text-dim);
 }
 .control .val {
@@ -144,8 +163,8 @@ input[type="range"]::-moz-range-thumb {
 .btn {
   display: block;
   width: 100%;
-  margin-bottom: 8px;
-  padding: 9px 12px;
+  margin-bottom: 6px;
+  padding: 7px 12px;
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text);
@@ -167,10 +186,34 @@ input[type="range"]::-moz-range-thumb {
 .btn-ghost  { background: transparent; color: var(--text-dim); }
 .btn.active { background: var(--accent); color: #07120f; border-color: var(--accent); }
 
+/* ---------- scenario presets ---------- */
+.preset-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.preset-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 8px;
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.preset-row .btn {
+  flex: 0 0 auto;
+  width: auto;
+  margin-bottom: 0;
+  text-align: center;
+}
+
 /* ---------- MEGA-plate gradient control ---------- */
 .gradient-control {
-  margin: 10px 0 8px;
-  padding: 10px;
+  margin: 8px 0 6px;
+  padding: 8px;
   border: 1px dashed var(--border);
   border-radius: 9px;
 }
@@ -184,8 +227,8 @@ input[type="range"]::-moz-range-thumb {
 }
 .gradient-control select {
   width: 100%;
-  margin-bottom: 8px;
-  padding: 7px 8px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
   font-size: 0.82rem;
   color: var(--text);
   background: var(--panel-2);
@@ -195,19 +238,32 @@ input[type="range"]::-moz-range-thumb {
 }
 .gradient-control .btn { margin-bottom: 0; }
 
-/* ---------- legend ---------- */
+/* ---------- legend (overlay on the dish, bottom-left dead space) ---------- */
 .legend-list {
   list-style: none;
   margin: 0; padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  font-size: 0.8rem;
+  gap: 5px;
+  font-size: 0.72rem;
   color: var(--text-dim);
 }
-.legend-list li { display: flex; align-items: center; gap: 8px; }
+.legend-overlay {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 4;
+  pointer-events: auto;          /* interactive so hovering an item shows its explainer */
+  cursor: help;
+  padding: 9px 11px;
+  background: rgba(13, 17, 24, 0.78);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  backdrop-filter: blur(2px);
+}
+.legend-list li { display: flex; align-items: center; gap: 7px; }
 .swatch {
-  width: 14px; height: 14px;
+  width: 11px; height: 11px;
   border-radius: 50%;
   display: inline-block;
   flex: 0 0 auto;
@@ -219,19 +275,19 @@ input[type="range"]::-moz-range-thumb {
 .stat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 .stat {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 10px;
+  padding: 7px 8px;
   text-align: center;
 }
 .stat-num {
   display: block;
-  font-size: 1.5rem;
+  font-size: 1.3rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -242,18 +298,18 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text-dim);
 }
 
-.bar-list { display: flex; flex-direction: column; gap: 8px; }
+.bar-list { display: flex; flex-direction: column; gap: 6px; }
 .breakdown-title {
-  margin: 14px 0 4px;
+  margin: 10px 0 4px;
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--text-dim);
 }
 .caption {
-  margin: 0 0 10px;
-  font-size: 0.7rem;
-  line-height: 1.4;
+  margin: 0 0 8px;
+  font-size: 0.68rem;
+  line-height: 1.35;
   color: #6f7a89;
 }
 .stat-hint {
@@ -289,7 +345,7 @@ input[type="range"]::-moz-range-thumb {
 .drug-tetracycline { background: var(--tet); }
 .drug-cipro        { background: var(--cip); }
 
-.muted { color: var(--text-dim); font-size: 0.76rem; margin: 12px 0 0; }
+.muted { color: var(--text-dim); font-size: 0.76rem; margin: 8px 0 0; }
 
 /* ---------- live chart ---------- */
 .chart {
@@ -325,16 +381,51 @@ input[type="range"]::-moz-range-thumb {
 }
 .tooltip div { display: flex; justify-content: space-between; gap: 10px; line-height: 1.5; }
 .tooltip div b { color: var(--text); font-weight: 600; text-align: right; }
+.tooltip .tip-note {
+  display: block;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  color: #9aa4b2;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+/* ---------- glossary ---------- */
+.glossary summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  list-style: none;
+}
+.glossary summary::-webkit-details-marker { display: none; }
+.glossary summary::before { content: '▸ '; }
+.glossary[open] summary::before { content: '▾ '; }
+.glossary dl { margin: 10px 0 0; }
+.glossary dt {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 8px;
+}
+.glossary dt:first-child { margin-top: 0; }
+.glossary dd {
+  margin: 2px 0 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
 
 /* ---------- ledger ---------- */
-.ledger-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* min-height keeps the ledger usable even when the stats panel is tall on short screens
+   (the sidebar scrolls rather than the ledger collapsing to its header) */
+.ledger-panel { flex: 1 1 auto; min-height: 150px; display: flex; flex-direction: column; }
 .ledger {
   flex: 1;
   min-height: 0;               /* allow the flex child to shrink so overflow scrolls */
   overflow-y: auto;
   overflow-x: hidden;
-  /* viewport-relative cap so the panel never runs off the bottom of the page */
-  max-height: min(360px, 40vh);
   font-family: "Cascadia Code", "Consolas", monospace;
   font-size: 0.74rem;
   line-height: 1.5;
@@ -354,11 +445,17 @@ input[type="range"]::-moz-range-thumb {
 
 /* ---------- responsive ---------- */
 @media (max-width: 1100px) {
+  /* stacked layout: switch back to normal page scrolling (the single-screen fit only
+     makes sense for the 3-column desktop view) */
+  body { overflow: auto; }
   .layout {
     grid-template-columns: 1fr;
+    flex: 0 0 auto;
+    min-height: 0;
   }
-  .stage { order: -1; }
-  .sidebar { flex-direction: row; flex-wrap: wrap; }
+  .stage { order: -1; overflow: visible; }
+  #dish { max-height: none; width: 100%; }
+  .sidebar { flex-direction: row; flex-wrap: wrap; overflow: visible; }
   .sidebar .panel { flex: 1 1 240px; }
   .ledger { max-height: 200px; }
 }
