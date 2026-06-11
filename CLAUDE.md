@@ -51,12 +51,19 @@ The file is organised into 10 numbered, commented sections:
 - **Reproduction**: `divideThreshold` (energy at which a cell divides — the trigger) and
   `reproEfficiency` (fraction of energy kept across division; 1.0 = conserved). Division
   splits the parent's energy evenly between the two daughters.
-- **Genetics**: `mutationRate` (chance per gene per division to GAIN resistance; driven live
-  by the slider, max 3%), `backMutationRate` (chance per carried gene per division to LOSE it
-  — lets resistance decay once pressure is gone).
-- **Resistance ecology**: `resistanceCost` (extra metabolism PER carried gene EVERY second,
-  drug or not). This is the standing fitness cost that keeps resistance rare absent selection;
-  it is distinct from `effluxCost`, which is only paid under an active flood.
+- **Graded resistance (MIC model)**: each cell carries `mic:{penicillin,tetracycline,cipro}`,
+  numeric levels `0..micMax` on the `doseResponse` scale (0 = susceptible, 1=1× band, 2=10×,
+  3=100×, 4=1000×). A cell survives a local dose `d` for a drug when its `mic >= d`; below that
+  it takes damage scaled by `(1 - mic/d)` (smooth, no cliff). All drug exposure (floods AND the
+  gradient) goes through `exposeToDrug(b, gene, dose, killPerSec, effluxScale, dt)`. Tunables:
+  `micMax` (4), `micStep` (1 band per mutation), `floodDose` (the dose a flood applies, 1),
+  `mutationUpBias` (0.85 = P(MIC steps up) when under that drug, else 0.5).
+- **Genetics**: `mutationRate` (chance per drug per division that MIC mutates ±1 band; biased
+  up under drug pressure, driven live by the slider, max 3%), `backMutationRate` (per drug per
+  division, MIC drifts DOWN one band when no drug present — lets resistance decay).
+- **Resistance ecology**: `resistanceCost` (extra metabolism per UNIT of TOTAL MIC EVERY
+  second, drug or not — so high-MIC cells pay more). Standing fitness cost that keeps MIC low
+  absent selection; distinct from `effluxCost`, paid only while actually under a drug.
 - **HGT/plasmids**: `plasmidDropChance`, `plasmidLifespan`, `plasmidPickupRadius`.
 - **Floods**: `floodDuration` (drain WINDOW, not just flavor — see gotcha), `floodSweep`
   (seconds for the front to cross), `floodDamage` (energy/s drained from susceptible cells),
@@ -70,19 +77,21 @@ The file is organised into 10 numbered, commented sections:
 - **Sim**: `simSpeed`, `fixedDt`, `maxPopulation`.
 
 ## Core entity shapes
-- **bacterium**: `{ x, y, vx, vy, energy, age, lifespan, resistanceGenes:{penicillin,tetracycline,cipro}, plasmidSlots, efflux, dead }`
+- **bacterium**: `{ x, y, vx, vy, energy, age, lifespan, mic:{penicillin,tetracycline,cipro} (numeric MIC levels), plasmidSlots, efflux, dead, cr/cg/cb (cached colour) }`.
+  Colour is cached by `setColor(b)` (hue = drug colours weighted by MIC; brightness scales with
+  `peakMic`). Helpers: `totalMic(b)`, `peakMic(b)`, `drugsResisted(b)`, `hasAnyResistance(b)`.
 - **nutrient**: `{ x, y }` (gains a transient `eaten` flag when consumed)
-- **plasmid**: `{ x, y, gene, age, life }` (gains a transient `absorbed` flag on pickup)
-- **flood**: `{ gene, age, front, duration, sweep, casualties }`
+- **plasmid**: `{ x, y, gene, mic, age, life }` — carries an MIC LEVEL; on pickup a cell raises
+  its own `mic[gene]` to match (gains a transient `absorbed` flag).
+- **flood**: `{ gene, age, front, duration, sweep, casualties }` (applies `CONFIG.floodDose`)
 
 ## Known gotchas
-- **Resistance must be COSTLY or it becomes a one-way ratchet to 100% pan-resistance.**
-  Genes only turn on via mutation + HGT; with no standing cost, carrying resistance is free
-  when no drug is present, so resistance can only accumulate and monotonically fixes
-  (confirmed: every gene → 100% by ~gen 1000, even at low mutation). The fix is BOTH a
-  per-gene `resistanceCost` paid every second (selection against resistance without drugs)
-  AND a sane mutation rate (slider capped at 3%, not 20%); `backMutationRate` additionally
-  lets resistance decay. **If late-game floods stop mattering, check `resistanceCost` first.**
+- **Resistance must be COSTLY or MIC ratchets to the max for free.** With no standing cost,
+  high MIC is free when no drug is present, so it only ever climbs and fixes at `micMax`. The
+  fix is BOTH `resistanceCost` scaled by TOTAL MIC paid every second (selection against high
+  MIC without drugs) AND a sane mutation rate (slider capped at 3%); `backMutationRate` drifts
+  MIC down absent a drug. **If late-game floods stop mattering, check `resistanceCost` first.**
+  Verified headless: no-drug mean MIC stays ~0.05 even at 3% mutation.
   Verified headless: no-flood @1% mutation keeps each gene <15% over 1000+ gens, a penicillin
   flood leaves pen-resistant survivors that recover toward ~100% pen-R while others stay low,
   and max mutation does not pan-fix all three.
@@ -128,12 +137,12 @@ The file is organised into 10 numbered, commented sections:
   so it's anchored at `floodDamage` (70). (2) If the drug-free refuge is too NARROW, the
   established colony bleeds across the absorbing band-1 boundary and goes fully extinct
   before any resistant mutant arises — so `gradientRefugeFrac` is a generous 0.5. Tuned
-  outcome (gradient applied at steady state): treated bands end up resistant-ONLY, the
-  refuge stays mixed, the resistant front can reach 1000× MIC, and only ~1/8 runs go extinct
-  (a legitimate "monotherapy cleared it first" result). Because resistance is BINARY, one
-  pen-R cell survives every band, so the advance is "refuge throws a mutant → it colonizes
-  the empty treated bands," not a true per-band stepwise climb (that would need resistance
-  *levels* — deferred). `update()` damage and `render()` overlay both use `bandBounds()`.
+  outcome (gradient applied at steady state): treated bands have NO fully-susceptible (MIC 0)
+  cells, the refuge stays low-MIC, and MIC forms a spatial CLINE — mean MIC rises band-by-band
+  toward the deep bands (verified: refuge ~0.4 vs treated ~2). With the graded MIC model this is
+  now a true per-band stepwise climb: a cell needs `mic >= band dose` to survive each band, so
+  the front advances only as MIC mutates upward. `update()` damage and `render()` overlay both
+  use `bandBounds()`.
 - **Resistant cells must SURVIVE the drug they resist — `floodDuration` is the lever, not
   `effluxCost`.** Original 7s flood + 9/s efflux tax drained resistant cells (on top of base
   metabolism + the always-on `resistanceCost`) faster than they could eat over the window, so

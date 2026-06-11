@@ -82,25 +82,29 @@
             <dt>Antimicrobial resistance (AMR)</dt>
             <dd>When bacteria evolve to survive a drug that used to kill them.</dd>
             <dt>Susceptible</dt>
-            <dd>A cell with no resistance — any antibiotic flooding its area kills it fast.</dd>
-            <dt>Resistance gene</dt>
-            <dd>A gene that lets a cell survive ONE specific antibiotic. Each drug has its own.</dd>
+            <dd>A cell with MIC 0 — any antibiotic dosed onto its area kills it fast.</dd>
+            <dt>MIC (minimum inhibitory concentration)</dt>
+            <dd>The lowest drug dose that stops a cell growing. Here each cell has a numeric MIC
+              <em>level</em> per drug (0 = susceptible, up to 4). It survives a dose only when its
+              MIC ≥ that dose; just below, it takes reduced (not full) damage. The MEGA-plate
+              bands are MIC multiples: 1× (level 1) → 10× → 100× → 1000× (level 4). Brighter cell
+              colour = higher MIC.</dd>
             <dt>Multi-drug resistance (MDR / “superbug”)</dt>
-            <dd>A cell carrying several resistance genes at once — survives several drugs.</dd>
+            <dd>A cell with raised MIC to several drugs at once — survives several antibiotics.</dd>
             <dt>Efflux pump</dt>
             <dd>A molecular pump that ejects the antibiotic from the cell. How a resistant cell
-              survives a flood — it glows while pumping and spends energy to do it.</dd>
+              survives a dose — it glows while pumping and spends energy in proportion to its MIC.</dd>
             <dt>Mutation</dt>
-            <dd>A random gene change when a cell divides — how brand-new resistance first appears.</dd>
+            <dd>When a cell divides, each drug's MIC can step up or down one band — biased upward
+              under drug pressure. How resistance climbs (and decays when the drug is gone).</dd>
             <dt>Plasmid &amp; horizontal gene transfer (HGT)</dt>
-            <dd>A ring of DNA a dead resistant cell leaves behind. A living cell that touches it
-              picks up the gene — resistance spreading sideways, without reproduction.</dd>
+            <dd>A ring of DNA a dead resistant cell leaves behind, carrying its MIC for one drug.
+              A living cell that touches it raises its own MIC to match — resistance spreading
+              sideways, without reproduction.</dd>
             <dt>Fitness cost</dt>
-            <dd>Carrying resistance burns extra energy every second, so resistant cells lose out
-              when no drug is present. That’s why resistance stays rare until you apply a drug.</dd>
-            <dt>MIC (minimum inhibitory concentration)</dt>
-            <dd>The lowest drug dose that stops a susceptible cell growing. In the MEGA-plate the
-              bands are multiples of MIC (1×, 10×, 100×, 1000×).</dd>
+            <dd>Carrying resistance burns extra energy every second — and the higher the MIC, the
+              more it costs — so resistant cells lose out when no drug is present. That’s why
+              resistance stays rare until you apply a drug.</dd>
           </dl>
         </details>
       </section>
@@ -111,12 +115,13 @@
     <section class="stage">
       <canvas id="dish" width="800" height="800"></canvas>
       <ul class="legend-list legend-overlay">
-        <li title="No resistance genes. Dies within seconds if its area is flooded with any antibiotic."><span class="swatch" style="background:#7fbf7f"></span> Susceptible</li>
-        <li title="Carries the penicillin-resistance gene: survives a penicillin flood (but not other drugs)."><span class="swatch" style="background:#4ea3ff"></span> Penicillin-R</li>
-        <li title="Carries the tetracycline-resistance gene: survives a tetracycline flood (but not other drugs)."><span class="swatch" style="background:#ffb648"></span> Tetracycline-R</li>
-        <li title="Carries the ciprofloxacin-resistance gene: survives a cipro flood (but not other drugs)."><span class="swatch" style="background:#e472ff"></span> Cipro-R</li>
-        <li title="A loose ring of DNA dropped by a dead resistant cell. A living cell that touches it absorbs the gene — resistance spreading WITHOUT reproduction (horizontal gene transfer)."><span class="swatch ring"></span> Floating plasmid</li>
-        <li title="This resistant cell is actively pumping the antibiotic back out of itself to survive the flood — at an energy cost. (Blended colours = multi-drug-resistant 'superbug'.)"><span class="swatch glow"></span> Efflux active</li>
+        <li title="MIC 0 — no resistance. Dies within seconds if its area is dosed with any antibiotic above 0."><span class="swatch" style="background:#7fbf7f"></span> Susceptible (MIC 0)</li>
+        <li title="Penicillin resistance. The brighter/more saturated the blue, the higher the cell's penicillin MIC (it survives stronger doses)."><span class="swatch" style="background:#4ea3ff"></span> Penicillin MIC</li>
+        <li title="Tetracycline resistance. Brighter amber = higher tetracycline MIC (survives stronger doses)."><span class="swatch" style="background:#ffb648"></span> Tetracycline MIC</li>
+        <li title="Ciprofloxacin resistance. Brighter magenta = higher cipro MIC (survives stronger doses)."><span class="swatch" style="background:#e472ff"></span> Cipro MIC</li>
+        <li title="Brightness/saturation scales with MIC: dim = low resistance, vivid = high. Blended colours = resistant to several drugs (a multi-drug-resistant 'superbug')."><span class="swatch" style="background:linear-gradient(90deg,#2a3a35,#e472ff)"></span> Brighter = higher MIC</li>
+        <li title="A loose ring of DNA dropped by a dead resistant cell, carrying its MIC for one drug. A living cell that touches it raises its own MIC to match — resistance spreading WITHOUT reproduction (horizontal gene transfer)."><span class="swatch ring"></span> Floating plasmid</li>
+        <li title="This cell is actively pumping the antibiotic back out to survive — the glow scales with how strongly it resists, at an energy cost."><span class="swatch glow"></span> Efflux active</li>
       </ul>
       <div id="tooltip" class="tooltip" hidden></div>
     </section>
@@ -127,19 +132,19 @@
         <h2>Live Stats</h2>
         <div class="stat-grid">
           <div class="stat" title="Total bacteria currently alive in the dish."><span class="stat-num" id="statLiving">0</span><span class="stat-label">Living</span></div>
-          <div class="stat" title="Cells carrying at least one resistance gene — they survive at least one antibiotic."><span class="stat-num" id="statResistant">0</span><span class="stat-label">Resistant <span class="stat-hint">(≥1 gene)</span></span></div>
-          <div class="stat" title="Multi-drug-resistant 'superbugs': cells carrying 2+ resistance genes at once."><span class="stat-num" id="statMultiResistant">0</span><span class="stat-label">Multi-resistant <span class="stat-hint">(≥2 genes)</span></span></div>
+          <div class="stat" title="Cells with MIC ≥ 1 to at least one drug — they survive at least one antibiotic at the 1× band."><span class="stat-num" id="statResistant">0</span><span class="stat-label">Resistant <span class="stat-hint">(MIC≥1, any drug)</span></span></div>
+          <div class="stat" title="Multi-drug-resistant 'superbugs': cells with MIC ≥ 1 to two or more drugs at once."><span class="stat-num" id="statMultiResistant">0</span><span class="stat-label">Multi-resistant <span class="stat-hint">(≥2 drugs)</span></span></div>
           <div class="stat" title="Floating rings of DNA (from dead resistant cells) that spread resistance by horizontal gene transfer."><span class="stat-num" id="statPlasmids">0</span><span class="stat-label">Plasmids</span></div>
           <div class="stat" title="Food particles in the dish. Cells eat these for energy; division and survival depend on it."><span class="stat-num" id="statNutrients">0</span><span class="stat-label">Nutrients</span></div>
         </div>
 
-        <h3 class="breakdown-title">Resistance by gene</h3>
-        <p class="caption">Cells carrying each gene, as count · % of colony. Multi-resistant
-          cells appear in more than one row, so these <em>sum to more than</em> the Resistant total.</p>
+        <h3 class="breakdown-title">Resistance by drug</h3>
+        <p class="caption">Bar = the colony's <em>mean MIC</em> for each drug (0–4 band levels: 1×→10×→100×→1000×).
+          Label = how many cells resist it at all (MIC ≥ 1) · μ = that mean MIC.</p>
         <div class="bar-list" id="resistanceBreakdown">
-          <div class="bar-row"><span>Penicillin</span><div class="bar"><i class="drug-penicillin" id="barPen"></i></div><span class="bar-val" id="cntPen">0 · 0%</span></div>
-          <div class="bar-row"><span>Tetracycline</span><div class="bar"><i class="drug-tetracycline" id="barTet"></i></div><span class="bar-val" id="cntTet">0 · 0%</span></div>
-          <div class="bar-row"><span>Cipro</span><div class="bar"><i class="drug-cipro" id="barCip"></i></div><span class="bar-val" id="cntCip">0 · 0%</span></div>
+          <div class="bar-row"><span>Penicillin</span><div class="bar"><i class="drug-penicillin" id="barPen"></i></div><span class="bar-val" id="cntPen">0 · μ0.0</span></div>
+          <div class="bar-row"><span>Tetracycline</span><div class="bar"><i class="drug-tetracycline" id="barTet"></i></div><span class="bar-val" id="cntTet">0 · μ0.0</span></div>
+          <div class="bar-row"><span>Cipro</span><div class="bar"><i class="drug-cipro" id="barCip"></i></div><span class="bar-val" id="cntCip">0 · μ0.0</span></div>
         </div>
         <h3 class="breakdown-title">History</h3>
         <p class="caption">Population (white, vs. max) and resistance % per gene over the last ~3 min.</p>

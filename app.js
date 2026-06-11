@@ -74,17 +74,28 @@ const CONFIG = {
   nutrientEnergy: 30,      // energy gained per nutrient eaten
   eatRadius: 11,           // center-to-center distance at which a cell consumes a nutrient
 
+  // --- GRADED RESISTANCE (MIC model) ---
+  // Each cell carries a numeric MIC per drug (mic.{penicillin,tetracycline,cipro}) on the
+  // doseResponse "level" scale: 0 = fully susceptible, up to micMax. A level L means the cell
+  // survives a local dose up to L (1=1× MIC band, 2=10×, 3=100×, 4=1000×). It survives a drug
+  // when mic >= the local dose; below that it takes kill damage scaled by (1 - mic/dose), a
+  // smooth ramp rather than a cliff. Mutations on division step MIC by micStep (one band).
+  micMax: 4,            // max MIC level — aligned with the deepest gradient band (1000× = level 4)
+  micStep: 1,           // band-equivalent change per mutation event
+  floodDose: 1,         // dose level a transient flood applies everywhere (1 ≈ the 1× MIC band)
+  mutationUpBias: 0.85, // P(a mutation steps MIC UP) when the cell is under that drug (else 0.5)
+
   // genetics (mutationRate set live from slider, as a fraction 0..1 per division)
-  mutationRate: 0.01,        // chance per gene, per division, to GAIN a resistance (de novo)
-  backMutationRate: 0.01,    // chance per carried gene, per division, to LOSE it (reversion)
+  mutationRate: 0.01,        // chance per drug, per division, that MIC mutates (steps up/down)
+  backMutationRate: 0.01,    // chance per drug, per division, MIC drifts DOWN when no drug present
 
   // --- RESISTANCE ECOLOGY (why resistance isn't a free one-way ratchet) ---
-  // Without a standing cost, resistance only ever turns on (mutation + HGT) and never pays
-  // for itself, so it monotonically fixes at 100% pan-resistance and floods stop mattering.
-  // resistanceCost makes every carried gene burn extra metabolism EVERY second, drug or not,
-  // so resistance is selected AGAINST when no antibiotic is present and only sweeps under
-  // active drug pressure. (Distinct from effluxCost, which is paid only under a flood.)
-  resistanceCost: 2.0,       // extra energy/sec PER resistance gene, always-on (base decay is 4)
+  // Without a standing cost, resistance only ever climbs (mutation + HGT) and never pays for
+  // itself, so it monotonically fixes at max MIC and floods stop mattering. resistanceCost
+  // makes every UNIT of MIC carried burn extra metabolism EVERY second, drug or not, so high
+  // resistance is selected AGAINST when no antibiotic is present and only pays off under active
+  // drug pressure. (Distinct from effluxCost, which is only paid while actually under a drug.)
+  resistanceCost: 2.0,       // extra energy/sec PER unit of total MIC, always-on (base decay is 4)
 
   // HGT / plasmids
   plasmidDropChance: 0.55,  // chance a resistant cell drops a plasmid on death
@@ -109,11 +120,11 @@ const CONFIG = {
 
   // --- MEGA-PLATE GRADIENT (Kishony 2016) ---
   // A standing spatial gradient of ONE drug instead of a transient sweep. The dish is
-  // divided left->right into bands of increasing concentration (relative MIC). Susceptible
-  // cells survive only in the drug-free refuge (band 0); resistant lineages advance into
-  // the treated bands as a front. We keep resistance BINARY — dose-scaled costs (not
-  // resistance levels) produce the graded advance: kill rate scales with local conc, and
-  // efflux gets costlier at higher conc so the top bands are survivable-but-expensive.
+  // divided left->right into bands of increasing concentration (relative MIC). Cells survive
+  // a band only when their MIC for that drug >= the band's dose level, so resistant lineages
+  // advance band-by-band as their MIC mutates upward (the true Kishony stepwise march). Kill
+  // scales with dose and how far the cell's MIC falls short; efflux gets costlier at higher
+  // conc so the top bands are survivable-but-expensive.
   gradientBands: [0, 1, 10, 100, 1000],  // relative MIC per band, low x -> high x
   // The drug-free refuge (band 0) takes a generous share of the dish so a healthy
   // susceptible colony lives there and keeps throwing resistant mutants; the remaining
@@ -137,7 +148,8 @@ const CONFIG = {
 // Scenario presets. Each one resets the world, sets the three sliders, seeds a colony
 // (optionally with some pre-resistant founders), and may switch on a gradient. The `seed`
 // fields: count = founders, resistantFrac = share that start resistant, genesPerResistant =
-// how many genes each of those carries.
+// how many drugs each of those resists, seedMic = the MIC level those drugs start at
+// (default 1). These fields are unchanged from the binary era so old presets still load.
 const PRESETS = {
   baseline: {
     label: '🧪 Baseline Colony',
@@ -153,9 +165,9 @@ const PRESETS = {
   },
   superbug: {
     label: '☠ Superbug Outbreak',
-    blurb: 'A few multi-drug-resistant founders seeded among susceptibles — watch MDR spread.',
+    blurb: 'A few high-MIC multi-drug-resistant founders seeded among susceptibles — watch MDR spread.',
     mutation: 1.0, nutrient: 30, speed: 1,
-    seed: { count: 70, resistantFrac: 0.12, genesPerResistant: 2 },
+    seed: { count: 70, resistantFrac: 0.12, genesPerResistant: 2, seedMic: 2 },
   },
   famine: {
     label: '🍽 Famine',
@@ -207,7 +219,21 @@ function randomDishPoint(margin = 8) {
 }
 
 function hasAnyResistance(b) {
-  return b.resistanceGenes.penicillin || b.resistanceGenes.tetracycline || b.resistanceGenes.cipro;
+  return b.mic.penicillin > 0 || b.mic.tetracycline > 0 || b.mic.cipro > 0;
+}
+// Sum of MIC across all drugs — drives the standing fitness cost (higher MIC = costlier).
+function totalMic(b) {
+  return b.mic.penicillin + b.mic.tetracycline + b.mic.cipro;
+}
+// Strongest single resistance — drives colour intensity (vivid = highly resistant).
+function peakMic(b) {
+  return Math.max(b.mic.penicillin, b.mic.tetracycline, b.mic.cipro);
+}
+// How many distinct drugs the cell resists at all (MIC >= 1) — for the multi-resistant tally.
+function drugsResisted(b) {
+  return (b.mic.penicillin >= 1 ? 1 : 0)
+       + (b.mic.tetracycline >= 1 ? 1 : 0)
+       + (b.mic.cipro >= 1 ? 1 : 0);
 }
 
 // MEGA-plate band layout: the leftmost gradientRefugeFrac of the dish is the drug-free
@@ -236,36 +262,66 @@ function localConc(x) {
   return CONFIG.gradientBands[bandIndex(x)];
 }
 // Dose response curve: returns log10(conc)+1 so band 1x -> 1, 10x -> 2, 100x -> 3, 1000x -> 4.
-// (conc 0 -> 0, i.e. the refuge is harmless.)
+// (conc 0 -> 0, i.e. the refuge is harmless.) MIC is expressed on this same level scale.
 function doseResponse(conc) {
   return conc > 0 ? Math.log10(conc) + 1 : 0;
 }
 
-// How many resistance genes a cell carries (0..3) — drives the standing fitness cost.
-function countGenes(b) {
-  return (b.resistanceGenes.penicillin ? 1 : 0)
-       + (b.resistanceGenes.tetracycline ? 1 : 0)
-       + (b.resistanceGenes.cipro ? 1 : 0);
+// The drug dose a cell currently faces for one gene, taken as the MAX over any active flood it
+// is under and the MEGA-plate gradient band it sits in (0 if neither). Used for mutation bias.
+function localDose(b, gene) {
+  let d = 0;
+  for (let i = 0; i < state.floods.length; i++) {
+    const f = state.floods[i];
+    if (f.gene === gene && b.x <= f.front * CONFIG.size && CONFIG.floodDose > d) d = CONFIG.floodDose;
+  }
+  if (state.gradient && state.gradient.gene === gene) {
+    const gd = doseResponse(localConc(b.x));
+    if (gd > d) d = gd;
+  }
+  return d;
 }
 
-// Cache a bacterium's render colour (blended from its resistance genes) onto b.cr/cg/cb.
-// Called once at creation and again only when genes change in life (HGT) — so render never
-// recomputes or allocates a colour array per cell per frame.
+// Apply one drug exposure to a cell, graded by how its MIC compares to the local dose.
+// resist = clamp(mic/dose, 0..1): 1 means fully resistant (survives, pays only the efflux tax),
+// 0 means fully susceptible (takes the full kill). In between, damage and efflux scale smoothly
+// — no hard cliff. killPerSec/effluxScale differ for floods vs the gradient (passed in).
+function exposeToDrug(b, gene, dose, killPerSec, effluxScale, dt) {
+  if (dose <= 0) return;
+  const m = b.mic[gene];
+  const resist = m >= dose ? 1 : m / dose;
+  if (resist < 1) {
+    b.energy -= killPerSec * dose * (1 - resist) * dt;   // vulnerable fraction takes damage
+  }
+  if (resist > 0) {
+    b.energy -= CONFIG.effluxCost * effluxScale * dose * resist * dt; // pumping costs energy
+    if (resist > b.efflux) b.efflux = resist;            // graded glow (full only at mic >= dose)
+  }
+}
+
+// Cache a bacterium's render colour onto b.cr/cg/cb from its MIC profile. Hue = the drug
+// colours weighted by this cell's MIC for each drug; intensity scales with the strongest single
+// MIC (susceptible grey-green -> vivid drug colour at micMax). Recomputed only at birth and on
+// HGT, so render never recomputes or allocates per cell per frame.
 function setColor(b) {
-  const g = b.resistanceGenes;
-  let n = 0, r = 0, gg = 0, bl = 0;
-  if (g.penicillin)   { const c = ANTIBIOTICS.penicillin.rgb;   r += c[0]; gg += c[1]; bl += c[2]; n++; }
-  if (g.tetracycline) { const c = ANTIBIOTICS.tetracycline.rgb; r += c[0]; gg += c[1]; bl += c[2]; n++; }
-  if (g.cipro)        { const c = ANTIBIOTICS.cipro.rgb;        r += c[0]; gg += c[1]; bl += c[2]; n++; }
-  if (n === 0) { b.cr = 127; b.cg = 191; b.cb = 127; } // susceptible grey-green
-  else { b.cr = r / n; b.cg = gg / n; b.cb = bl / n; }
+  const m = b.mic, total = m.penicillin + m.tetracycline + m.cipro;
+  if (total <= 0) { b.cr = 127; b.cg = 191; b.cb = 127; return; } // susceptible grey-green
+  const P = ANTIBIOTICS.penicillin.rgb, T = ANTIBIOTICS.tetracycline.rgb, C = ANTIBIOTICS.cipro.rgb;
+  const hr = (P[0] * m.penicillin + T[0] * m.tetracycline + C[0] * m.cipro) / total;
+  const hg = (P[1] * m.penicillin + T[1] * m.tetracycline + C[1] * m.cipro) / total;
+  const hb = (P[2] * m.penicillin + T[2] * m.tetracycline + C[2] * m.cipro) / total;
+  // lerp grey-green -> weighted hue by t; even MIC 1 is clearly tinted, micMax is fully vivid
+  const t = clamp(0.4 + 0.6 * (peakMic(b) / CONFIG.micMax), 0.4, 1);
+  b.cr = 127 + (hr - 127) * t;
+  b.cg = 191 + (hg - 191) * t;
+  b.cb = 127 + (hb - 127) * t;
 }
 
 /* ============================================================
    4. ENTITY FACTORIES
    ============================================================ */
 
-function createBacterium(x, y, genes = null) {
+function createBacterium(x, y, mic = null) {
   const b = {
     x, y,
     vx: rand(-8, 8),
@@ -273,9 +329,10 @@ function createBacterium(x, y, genes = null) {
     energy: CONFIG.startEnergy,
     age: 0,
     lifespan: rand(CONFIG.lifespanMin, CONFIG.lifespanMax),
-    resistanceGenes: genes
-      ? { ...genes }
-      : { penicillin: false, tetracycline: false, cipro: false },
+    // graded resistance: a numeric MIC level per drug (0 = susceptible). Defaults to all-0.
+    mic: mic
+      ? { penicillin: mic.penicillin || 0, tetracycline: mic.tetracycline || 0, cipro: mic.cipro || 0 }
+      : { penicillin: 0, tetracycline: 0, cipro: 0 },
     plasmidSlots: 1,   // how many plasmids it can still absorb
     efflux: 0,         // >0 means actively pumping (decays for the visual glow)
     dead: false,
@@ -289,8 +346,10 @@ function createNutrient(x, y) {
   return { x, y };
 }
 
-function createPlasmid(x, y, gene) {
-  return { x, y, gene, age: 0, life: CONFIG.plasmidLifespan };
+// A plasmid now carries an MIC LEVEL (not just a boolean gene): a cell that absorbs it gains
+// that drug's resistance up to `mic` (horizontal gene transfer of a graded trait).
+function createPlasmid(x, y, gene, mic) {
+  return { x, y, gene, mic, age: 0, life: CONFIG.plasmidLifespan };
 }
 
 // A flood = a drug sweeping across the dish then lingering, then clearing.
@@ -443,43 +502,26 @@ function update(dt) {
 
     // metabolism + aging
     b.age += dt;
-    // baseline metabolism + standing fitness cost of carrying resistance (paid EVERY second,
-    // drug or not). This is what stops resistance from ratcheting to 100% absent selection;
-    // it is separate from effluxCost, which only applies while a flood is active.
-    const geneCount = countGenes(b);
-    b.energy -= (CONFIG.energyDecayPerSec + geneCount * CONFIG.resistanceCost) * dt;
+    // baseline metabolism + standing fitness cost of carrying resistance, scaled by TOTAL MIC
+    // (high-resistance cells pay more), paid EVERY second drug or not. This is what stops MIC
+    // from ratcheting to the max absent selection; separate from effluxCost (only paid under a drug).
+    b.energy -= (CONFIG.energyDecayPerSec + totalMic(b) * CONFIG.resistanceCost) * dt;
     if (b.efflux > 0) b.efflux = Math.max(0, b.efflux - dt * 2);
 
-    // antibiotic exposure
+    // antibiotic exposure — graded by MIC vs the local dose (see exposeToDrug).
     for (const f of state.floods) {
       // a cell is "under" the drug once the sweep front has passed its x position
-      const reach = f.front * CONFIG.size;
-      if (b.x <= reach) {
-        if (b.resistanceGenes[f.gene]) {
-          // resistant: survive but pay the efflux-pump tax
-          b.energy -= CONFIG.effluxCost * dt;
-          b.efflux = 1;
-        } else {
-          // susceptible: rapidly drained
-          b.energy -= CONFIG.floodDamage * dt;
-        }
+      if (b.x <= f.front * CONFIG.size) {
+        exposeToDrug(b, f.gene, CONFIG.floodDose, CONFIG.floodDamage, 1, dt);
       }
     }
 
     // MEGA-plate gradient: a standing dose that scales with the cell's band (see localConc).
-    // Same binary survive/pay structure as a flood, but dose-scaled so the front advances
-    // band-by-band: susceptibles die faster the deeper they wander; resistant cells survive
-    // every band but pay a steeper efflux tax the higher the concentration.
+    // The front advances band-by-band as MIC rises: a cell survives a band only when its MIC
+    // for the drug >= that band's dose; below that it takes smoothly-scaled damage.
     if (state.gradient) {
-      const dose = doseResponse(localConc(b.x));
-      if (dose > 0) {
-        if (b.resistanceGenes[state.gradient.gene]) {
-          b.energy -= CONFIG.effluxCost * CONFIG.gradientEffluxScale * dose * dt;
-          b.efflux = 1;
-        } else {
-          b.energy -= CONFIG.gradientKill * dose * dt;
-        }
-      }
+      exposeToDrug(b, state.gradient.gene, doseResponse(localConc(b.x)),
+                   CONFIG.gradientKill, CONFIG.gradientEffluxScale, dt);
     }
 
     // eat nearby nutrients — reuse the same nutrient list queried above (one query per cell);
@@ -494,19 +536,19 @@ function update(dt) {
       }
     }
 
-    // HGT: absorb a nearby plasmid if susceptible to that gene and has a slot
+    // HGT: absorb a nearby plasmid that would RAISE this cell's MIC for that drug (and has a slot)
     if (b.plasmidSlots > 0) {
       const nearP = plasmidGrid.queryInto(b.x, b.y, _plasScratch);
       const pickR2 = CONFIG.plasmidPickupRadius * CONFIG.plasmidPickupRadius;
       for (let i = 0; i < nearP.length; i++) {
         const p = nearP[i];
         if (p.absorbed) continue;
-        if (b.resistanceGenes[p.gene]) continue;
+        if (b.mic[p.gene] >= p.mic) continue;  // already at least as resistant — nothing to gain
         if (dist2(b.x, b.y, p.x, p.y) < pickR2) {
           p.absorbed = true;
-          b.resistanceGenes[p.gene] = true;
+          b.mic[p.gene] = Math.max(b.mic[p.gene], p.mic); // gain the plasmid's MIC level
           b.plasmidSlots--;
-          setColor(b);                  // genes changed — refresh cached render colour
+          setColor(b);                  // MIC changed — refresh cached render colour
           state.hgtThisWindow++;        // batched to the ledger ~once/sec (see update tail)
           break;
         }
@@ -515,17 +557,21 @@ function update(dt) {
 
     // reproduction
     if (b.energy >= CONFIG.divideThreshold && state.bacteria.length + births.length < CONFIG.maxPopulation) {
-      const childGenes = { ...b.resistanceGenes };
+      const childMic = { penicillin: b.mic.penicillin, tetracycline: b.mic.tetracycline, cipro: b.mic.cipro };
 
-      // mutation roll per gene: gain a resistance (de novo) or lose one (reversion).
-      // Back-mutation lets resistance decay once drug pressure is gone, instead of only
-      // ever accumulating.
+      // mutation per drug: MIC steps up or down by one band-equivalent, biased UPWARD when the
+      // cell is under that drug (selection for higher resistance). Plus a reversion-drift roll
+      // that nudges MIC down when no drug is present, so resistance decays once pressure is gone.
       for (const gene of GENES) {
-        if (!childGenes[gene] && Math.random() < CONFIG.mutationRate) {
-          childGenes[gene] = true;
-          state.mutationsThisWindow++;
-        } else if (childGenes[gene] && Math.random() < CONFIG.backMutationRate) {
-          childGenes[gene] = false;
+        const underDrug = localDose(b, gene) > 0;
+        if (Math.random() < CONFIG.mutationRate) {
+          const up = Math.random() < (underDrug ? CONFIG.mutationUpBias : 0.5);
+          const next = clamp(childMic[gene] + (up ? CONFIG.micStep : -CONFIG.micStep), 0, CONFIG.micMax);
+          if (up && next > childMic[gene]) state.mutationsThisWindow++;
+          childMic[gene] = next;
+        }
+        if (!underDrug && childMic[gene] > 0 && Math.random() < CONFIG.backMutationRate) {
+          childMic[gene] = clamp(childMic[gene] - CONFIG.micStep, 0, CONFIG.micMax);
         }
       }
 
@@ -533,7 +579,7 @@ function update(dt) {
       const child = createBacterium(
         b.x + Math.cos(angle) * 5,
         b.y + Math.sin(angle) * 5,
-        childGenes
+        childMic
       );
       // Split the parent's energy evenly between the two daughter cells.
       // reproEfficiency models the metabolic cost of replication: 1.0 conserves energy
@@ -548,11 +594,11 @@ function update(dt) {
     // death
     if (b.energy <= 0 || b.age >= b.lifespan) {
       b.dead = true;
-      // HGT seed: resistant corpses may leave a plasmid
+      // HGT seed: a resistant corpse may leave a plasmid carrying its MIC for a random drug it resisted
       if (hasAnyResistance(b) && Math.random() < CONFIG.plasmidDropChance) {
-        const resistant = GENES.filter(g => b.resistanceGenes[g]);
+        const resistant = GENES.filter(g => b.mic[g] > 0);
         const gene = resistant[(Math.random() * resistant.length) | 0];
-        state.plasmids.push(createPlasmid(b.x, b.y, gene));
+        state.plasmids.push(createPlasmid(b.x, b.y, gene, b.mic[gene]));
       }
     }
   }
@@ -840,20 +886,23 @@ function addLedger(msg, kind = 'info') {
 }
 
 // ---- stats ----
-// Single pass over the colony returning every tally the stats panel and chart need.
-// Per-gene counts include a multi-resistant cell in EVERY gene it carries (the "who survives
-// drug X" number), so pen+tet+cip can exceed `resistant`; `multi` (>=2 genes) explains the gap.
+// Single pass over the colony. pen/tet/cip = how many cells carry ANY resistance (MIC >= 1) to
+// that drug; micPen/micTet/micCip = summed MIC for the colony mean. `resistant` = resists >=1
+// drug, `multi` = resists >=2. A multi-resistant cell counts in every drug it resists, so
+// pen+tet+cip can exceed `resistant`.
 function colonyCounts() {
-  let resistant = 0, multi = 0, pen = 0, tet = 0, cip = 0;
+  let resistant = 0, multi = 0, pen = 0, tet = 0, cip = 0, micPen = 0, micTet = 0, micCip = 0;
   for (const b of state.bacteria) {
-    let genes = 0;
-    if (b.resistanceGenes.penicillin)   { pen++; genes++; }
-    if (b.resistanceGenes.tetracycline) { tet++; genes++; }
-    if (b.resistanceGenes.cipro)        { cip++; genes++; }
-    if (genes >= 1) resistant++;
-    if (genes >= 2) multi++;
+    const m = b.mic;
+    let drugs = 0;
+    if (m.penicillin   >= 1) { pen++; drugs++; }
+    if (m.tetracycline >= 1) { tet++; drugs++; }
+    if (m.cipro        >= 1) { cip++; drugs++; }
+    micPen += m.penicillin; micTet += m.tetracycline; micCip += m.cipro;
+    if (drugs >= 1) resistant++;
+    if (drugs >= 2) multi++;
   }
-  return { living: state.bacteria.length, resistant, multi, pen, tet, cip };
+  return { living: state.bacteria.length, resistant, multi, pen, tet, cip, micPen, micTet, micCip };
 }
 
 // Push one rolling-window sample for the live chart. Called from update() on every 60th tick
@@ -880,16 +929,16 @@ function updateStats() {
   els.statNutrients.textContent = state.nutrients.length;
   els.statTick.textContent = `Tick ${state.tick} · Gen ${state.generation} · ${fpsEMA.toFixed(0)} FPS`;
 
-  // Bars and labels are share-of-colony (% of living), NOT share of the Resistant total —
-  // the "count · %" label makes that explicit.
+  // Graded display: the bar fills with the colony's MEAN MIC for the drug (0..micMax), and the
+  // label shows how many cells resist it at all (MIC>=1) plus that mean as "μ<level>".
   const denom = Math.max(living, 1);
-  const pct = n => Math.round((n / denom) * 100);
-  els.barPen.style.width = `${(c.pen / denom) * 100}%`;
-  els.barTet.style.width = `${(c.tet / denom) * 100}%`;
-  els.barCip.style.width = `${(c.cip / denom) * 100}%`;
-  els.cntPen.textContent = `${c.pen} · ${pct(c.pen)}%`;
-  els.cntTet.textContent = `${c.tet} · ${pct(c.tet)}%`;
-  els.cntCip.textContent = `${c.cip} · ${pct(c.cip)}%`;
+  const meanPen = c.micPen / denom, meanTet = c.micTet / denom, meanCip = c.micCip / denom;
+  els.barPen.style.width = `${(meanPen / CONFIG.micMax) * 100}%`;
+  els.barTet.style.width = `${(meanTet / CONFIG.micMax) * 100}%`;
+  els.barCip.style.width = `${(meanCip / CONFIG.micMax) * 100}%`;
+  els.cntPen.textContent = `${c.pen} · μ${meanPen.toFixed(1)}`;
+  els.cntTet.textContent = `${c.tet} · μ${meanTet.toFixed(1)}`;
+  els.cntCip.textContent = `${c.cip} · μ${meanCip.toFixed(1)}`;
 }
 
 // ---- actions ----
@@ -1011,17 +1060,20 @@ function applyPreset(key) {
   // seed nutrients
   for (let i = 0; i < 60; i++) { const q = randomDishPoint(); state.nutrients.push(createNutrient(q.x, q.y)); }
 
-  // seed founders, some pre-resistant
+  // seed founders, some pre-resistant. Resistant founders get MIC = seedMic (default 1, i.e. the
+  // minimum resistant level) for `genesPerResistant` random drugs — the graded analogue of the
+  // old boolean "gene on", so existing presets load unchanged.
   const s = p.seed;
+  const level = s.seedMic || 1;
   for (let i = 0; i < s.count && state.bacteria.length < CONFIG.maxPopulation; i++) {
     const q = randomDishPoint();
-    let genes = null;
+    let mic = null;
     if (s.resistantFrac && Math.random() < s.resistantFrac) {
-      genes = { penicillin: false, tetracycline: false, cipro: false };
+      mic = { penicillin: 0, tetracycline: 0, cipro: 0 };
       const pick = [...GENES].sort(() => Math.random() - 0.5).slice(0, s.genesPerResistant || 1);
-      for (const g of pick) genes[g] = true;
+      for (const g of pick) mic[g] = level;
     }
-    const b = createBacterium(q.x, q.y, genes);
+    const b = createBacterium(q.x, q.y, mic);
     b.age = rand(0, b.lifespan * 0.6); // stagger ages so founders don't die together
     state.bacteria.push(b);
   }
@@ -1103,18 +1155,21 @@ function showTooltip(b, px, py) {
   const tip = els.tooltip;
   if (!tip) return;
   if (!b) { tip.hidden = true; return; }
-  const genes = GENES.filter(g => b.resistanceGenes[g]).map(g => ANTIBIOTICS[g].name);
-  const resLine = genes.length ? genes.join(', ') : 'none — susceptible';
+  // MIC level -> "×MIC" band label (level 1 = 1×, 2 = 10×, 3 = 100×, 4 = 1000×)
+  const micFmt = lvl => `${Math.round(10 ** (lvl - 1))}× MIC`;
+  const parts = GENES.filter(g => b.mic[g] > 0).map(g => `${ANTIBIOTICS[g].name} ${micFmt(b.mic[g])}`);
+  const resLine = parts.length ? parts.join(', ') : 'none — susceptible (MIC 0)';
+  const nDrugs = parts.length;
   // plain-language footer so the inspector also teaches the terms
   const note = b.efflux > 0
-    ? 'Efflux pump ON: actively pumping the antibiotic out to survive (burns energy).'
-    : genes.length >= 2
-      ? 'Multi-drug-resistant (MDR): carries several resistance genes — a "superbug".'
-      : genes.length === 1
-        ? 'Resistant to one drug only — still dies if flooded with a different antibiotic.'
-        : 'No resistance genes — dies within seconds if its area is flooded with any drug.';
+    ? 'Efflux pump ON: pumping the antibiotic out to survive (burns energy, scales with MIC).'
+    : nDrugs >= 2
+      ? 'Multi-drug-resistant (MDR): elevated MIC to several drugs — a "superbug".'
+      : nDrugs === 1
+        ? 'Resistant to one drug — survives doses up to its MIC; a higher dose still kills it.'
+        : 'No resistance (MIC 0) — dies if its area is dosed with any antibiotic.';
   tip.innerHTML =
-    `<div class="tip-title">${genes.length ? (genes.length >= 2 ? 'Multi-resistant cell' : 'Resistant cell') : 'Susceptible cell'}</div>` +
+    `<div class="tip-title">${nDrugs ? (nDrugs >= 2 ? 'Multi-resistant cell' : 'Resistant cell') : 'Susceptible cell'}</div>` +
     `<div><span>Resists</span><b>${resLine}</b></div>` +
     `<div><span>Energy</span><b>${b.energy.toFixed(0)} / ${CONFIG.divideThreshold} to divide</b></div>` +
     `<div><span>Age</span><b>${b.age.toFixed(1)} / ${b.lifespan.toFixed(0)} s</b></div>` +

@@ -83,10 +83,17 @@ function makeSim(seed = 12345) {
 }
 
 // --- colony helpers ---
+// % of the colony resistant to a drug at all (MIC >= 1)
 const genePct = (sim, gene) => {
   const L = Math.max(sim.state.bacteria.length, 1);
-  let c = 0; for (const b of sim.state.bacteria) if (b.resistanceGenes[gene]) c++;
+  let c = 0; for (const b of sim.state.bacteria) if (b.mic[gene] >= 1) c++;
   return Math.round((c / L) * 100);
+};
+// mean MIC level for a drug across the colony
+const meanMic = (sim, gene) => {
+  const L = Math.max(sim.state.bacteria.length, 1);
+  let s = 0; for (const b of sim.state.bacteria) s += b.mic[gene];
+  return s / L;
 };
 
 // --- tiny test runner ---
@@ -120,6 +127,10 @@ test('state stays finite and all collections stay capped', () => {
       assert(Number.isFinite(b.x) && Number.isFinite(b.y), `non-finite position at step ${i}`);
       assert(Number.isFinite(b.vx) && Number.isFinite(b.vy), `non-finite velocity at step ${i}`);
       assert(Number.isFinite(b.energy), `non-finite energy at step ${i}`);
+      for (const g of ['penicillin', 'tetracycline', 'cipro']) {
+        const v = b.mic[g];
+        assert(Number.isFinite(v) && v >= 0 && v <= sim.CONFIG.micMax, `MIC out of range (${g}=${v}) at step ${i}`);
+      }
     }
     assert(sim.state.bacteria.length <= sim.CONFIG.maxPopulation, `population overflow at step ${i}`);
     assert(sim.state.nutrients.length <= sim.CONFIG.maxNutrients, `nutrient overflow at step ${i}`);
@@ -128,7 +139,7 @@ test('state stays finite and all collections stay capped', () => {
   }
   // resistant can never exceed living
   let resistant = 0;
-  for (const b of sim.state.bacteria) if (b.resistanceGenes.penicillin || b.resistanceGenes.tetracycline || b.resistanceGenes.cipro) resistant++;
+  for (const b of sim.state.bacteria) if (b.mic.penicillin >= 1 || b.mic.tetracycline >= 1 || b.mic.cipro >= 1) resistant++;
   assert(resistant <= sim.state.bacteria.length, 'resistant > living');
 });
 
@@ -149,7 +160,7 @@ test('no drug: resistance stays rare and never pan-fixes (max mutation 3%, 300 s
 test('single flood selects resistant: a 25%-tet colony sweeps to >80% tet after recovery', () => {
   const { sim, step } = makeSim(3);
   sim.applyPreset('baseline'); step(90);
-  for (const b of sim.state.bacteria) if (Math.random() < 0.25) b.resistanceGenes.tetracycline = true;
+  for (const b of sim.state.bacteria) if (Math.random() < 0.25) b.mic.tetracycline = sim.CONFIG.floodDose;
   sim.floodAntibiotic('tetracycline'); step(sim.CONFIG.floodDuration); step(45);
   assert(sim.state.bacteria.length > 0, 'colony failed to recover after flood');
   assert(genePct(sim, 'tetracycline') > 80, `tet did not sweep (${genePct(sim, 'tetracycline')}%)`);
@@ -158,7 +169,9 @@ test('single flood selects resistant: a 25%-tet colony sweeps to >80% tet after 
 test('resistant cells survive their own drug (>= 60% ride out a flood)', () => {
   const { sim, step } = makeSim(4);
   sim.applyPreset('baseline'); step(60);
-  for (const b of sim.state.bacteria) b.resistanceGenes.tetracycline = true;
+  // MIC = floodDose is the minimum that fully resists the flood (and the cheapest to carry —
+  // a higher MIC would survive the drug too but pay a much larger standing fitness cost).
+  for (const b of sim.state.bacteria) b.mic.tetracycline = sim.CONFIG.floodDose;
   const before = sim.state.bacteria.length;
   let id = 0; for (const b of sim.state.bacteria) b.__id = id++;
   const ids = new Set(sim.state.bacteria.map((b) => b.__id));
@@ -185,17 +198,45 @@ test('low nutrient supply: colony competes but does not go extinct', () => {
   assert(minLiving > 0, `colony went extinct under low food (min ${minLiving}) — foraging reach regressed`);
 });
 
-test('MEGA-plate gradient: treated bands end up resistant-only', () => {
+test('MEGA-plate gradient: no fully-susceptible cells survive in treated bands', () => {
   const { sim, step } = makeSim(7);
   sim.applyPreset('baseline'); step(120);
   sim.state.gradient = { gene: 'penicillin' }; step(220);
   const refugeEdge = sim.CONFIG.gradientRefugeFrac * sim.CONFIG.size;
   let susceptibleInTreated = 0, treatedTotal = 0;
   for (const b of sim.state.bacteria) {
-    if (b.x > refugeEdge) { treatedTotal++; if (!b.resistanceGenes.penicillin) susceptibleInTreated++; }
+    if (b.x > refugeEdge) { treatedTotal++; if (b.mic.penicillin < 1) susceptibleInTreated++; }
   }
-  // a few susceptibles may be transiently wandering across the boundary; require near-zero
-  assert(susceptibleInTreated <= 3, `${susceptibleInTreated} susceptible cells alive in treated bands (of ${treatedTotal})`);
+  // a few may be transiently wandering across the boundary; require near-zero
+  assert(susceptibleInTreated <= 3, `${susceptibleInTreated} susceptible (MIC<1) cells alive in treated bands (of ${treatedTotal})`);
+});
+
+test('MEGA-plate gradient: MIC forms a spatial cline (treated band MIC >> refuge)', () => {
+  const { sim, step } = makeSim(11);
+  sim.applyPreset('baseline'); step(120);
+  sim.state.gradient = { gene: 'penicillin' }; step(220);
+  const refugeEdge = sim.CONFIG.gradientRefugeFrac * sim.CONFIG.size;
+  let refSum = 0, refN = 0, trSum = 0, trN = 0;
+  for (const b of sim.state.bacteria) {
+    if (b.x > refugeEdge) { trSum += b.mic.penicillin; trN++; }
+    else { refSum += b.mic.penicillin; refN++; }
+  }
+  const refMean = refSum / Math.max(refN, 1), trMean = trSum / Math.max(trN, 1);
+  assert(trMean >= 1.3, `treated-band mean MIC too low (${trMean.toFixed(2)}) — graded resistance not evolving`);
+  assert(trMean > refMean + 0.5, `no MIC cline (refuge ${refMean.toFixed(2)} vs treated ${trMean.toFixed(2)})`);
+});
+
+test('HGT transfers an MIC value (not a boolean) between cells', () => {
+  const { sim, step } = makeSim(12);
+  sim.applyPreset('baseline'); step(20);
+  // drop a MIC-3 penicillin plasmid right on top of a susceptible cell
+  const target = sim.state.bacteria.find((b) => b.mic.penicillin === 0 && b.plasmidSlots > 0);
+  assert(target, 'no susceptible cell to receive the plasmid');
+  sim.state.plasmids.push({ x: target.x, y: target.y, gene: 'penicillin', mic: 3, age: 0, life: 16 });
+  step(0.5);
+  let upgraded = 0;
+  for (const b of sim.state.bacteria) if (b.mic.penicillin >= 3) upgraded++;
+  assert(upgraded >= 1, 'no cell gained the plasmid\'s MIC-3 level via HGT');
 });
 
 /* ============================================================

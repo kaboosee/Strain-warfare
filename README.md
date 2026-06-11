@@ -35,20 +35,26 @@ Exits non-zero on any failure.
 ## AMR mechanics modelled
 
 The sandbox is a continuous 2-D agent simulation. Each bacterium is an autonomous agent
-with its own energy, age, and set of resistance genes.
+with its own energy, age, and a graded **MIC (minimum inhibitory concentration) level per
+drug** — `0` = fully susceptible, higher = more resistant, on a band scale of `1× → 10× →
+100× → 1000×` (levels 1–4, matching the MEGA-plate bands).
 
-- **Mutation** — when a cell divides, each antibiotic-resistance gene it lacks has a
-  small chance (the **Mutation Rate** slider) of switching on in the daughter. This is
-  how brand-new resistance first appears in the colony.
+- **Graded resistance (MIC)** — a cell survives a drug only when its MIC for that drug is
+  **≥ the local dose**. Just below the dose it takes *reduced* (not full) damage, scaling
+  smoothly with the gap — no hard cliff. The brighter and more saturated a cell's colour,
+  the higher its MIC.
+- **Mutation** — when a cell divides, each drug's MIC can step **up or down by one band**
+  (the **Mutation Rate** slider), biased upward when the cell is currently under that drug.
+  This is how resistance climbs under pressure — and decays once the drug is gone.
 - **Horizontal Gene Transfer (HGT) via plasmids** — when a *resistant* cell dies it may
-  leave a **plasmid** (a pulsing colored ring) at its death site, carrying one of its
-  resistance genes. A living, susceptible cell that drifts into the plasmid **absorbs**
-  it and instantly gains that resistance — no reproduction required. This is why
-  resistance can spread explosively even through a non-dividing population.
-- **Efflux pumps** — resistant cells survive an antibiotic flood by actively pumping the
-  drug out. While doing so they glow with a cyan aura and pay a small extra energy cost
-  (the metabolic price of resistance).
-- **Three antibiotic classes**, each with its own resistance gene and flood color:
+  leave a **plasmid** (a pulsing colored ring) carrying its **MIC level** for one drug. A
+  living cell that drifts into it **raises its own MIC to match** — no reproduction
+  required. This is why resistance can spread explosively even through a non-dividing
+  population.
+- **Efflux pumps** — resistant cells survive a dose by actively pumping the drug out. They
+  glow with a cyan aura (brighter the more strongly they resist) and pay an energy cost in
+  proportion to their MIC.
+- **Three antibiotic classes**, each with its own MIC axis and flood color:
 
   | Antibiotic | Target | Color |
   |---|---|---|
@@ -57,7 +63,7 @@ with its own energy, age, and set of resistance genes.
   | Ciprofloxacin | DNA gyrase | 🟣 magenta |
 
   A flood sweeps across the dish as a translucent colored wave. Any cell behind the front
-  **without** the matching resistance gene loses energy fast and dies within a few seconds.
+  whose MIC for that drug is below the flood dose loses energy fast and dies within seconds.
 - **MEGA-plate gradient** (the Kishony 2016 experiment) — instead of a transient flood, lay
   down a **standing antibiotic gradient**: the dish splits left→right into a drug-free
   **refuge** and bands of rising concentration (1× → 10× → 100× → 1000× MIC). Susceptible
@@ -119,13 +125,16 @@ mutations, HGT events, floods, and colony wipe-outs.
 
 ## Colour legend
 
+Cell colour encodes resistance: hue = which drug(s), **brightness/saturation = MIC level**
+(dim = low, vivid = high).
+
 | Colour | Meaning |
 |---|---|
-| 🟢 Grey-green dot | Susceptible bacterium (no resistance) |
-| 🔵 Blue | Penicillin-resistant |
-| 🟠 Amber | Tetracycline-resistant |
-| 🟣 Magenta | Ciprofloxacin-resistant |
-| Blended colour | Multi-drug-resistant (carries several genes) |
-| Pulsing ring | Floating plasmid (HGT payload), coloured by its gene |
-| Cyan glow / bright border | Efflux pump active — surviving an antibiotic flood |
+| 🟢 Grey-green dot | Susceptible bacterium (MIC 0) |
+| 🔵 Blue (brighter = higher MIC) | Penicillin resistance |
+| 🟠 Amber (brighter = higher MIC) | Tetracycline resistance |
+| 🟣 Magenta (brighter = higher MIC) | Ciprofloxacin resistance |
+| Blended colour | Multi-drug-resistant (elevated MIC to several drugs) |
+| Pulsing ring | Floating plasmid (HGT payload carrying an MIC level), coloured by its drug |
+| Cyan glow / bright border | Efflux pump active — surviving a dose (glow scales with MIC) |
 | Small green dots | Nutrients |
