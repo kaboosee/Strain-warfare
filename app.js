@@ -195,6 +195,9 @@ const state = {
   gradient: null,         // { gene } when a MEGA-plate gradient is active, else null
   history: [],            // ring buffer of {living,penPct,tetPct,cipPct} samples for the chart
   hovered: null,          // bacterium currently under the cursor (cell inspector)
+  course: null,           // active dosing regimen, or null. Shape:
+                          //   { drug, dose, intervalTicks, dosesRemaining, nextDoseTick,
+                          //     adherence, total, taken, missed, resistantAtStart }
 };
 
 let canvas, ctx;
@@ -273,7 +276,7 @@ function localDose(b, gene) {
   let d = 0;
   for (let i = 0; i < state.floods.length; i++) {
     const f = state.floods[i];
-    if (f.gene === gene && b.x <= f.front * CONFIG.size && CONFIG.floodDose > d) d = CONFIG.floodDose;
+    if (f.gene === gene && b.x <= f.front * CONFIG.size && f.dose > d) d = f.dose;
   }
   if (state.gradient && state.gradient.gene === gene) {
     const gd = doseResponse(localConc(b.x));
@@ -352,14 +355,17 @@ function createPlasmid(x, y, gene, mic) {
   return { x, y, gene, mic, age: 0, life: CONFIG.plasmidLifespan };
 }
 
-// A flood = a drug sweeping across the dish then lingering, then clearing.
-function createFlood(geneTarget) {
+// A flood = a drug sweeping across the dish then lingering, then clearing. Each flood carries
+// its own `dose` (MIC-band level) so a treatment course can dose at a chosen strength while the
+// instant-flood buttons keep the default CONFIG.floodDose. exposeToDrug/localDose read f.dose.
+function createFlood(geneTarget, dose = CONFIG.floodDose) {
   return {
     gene: geneTarget,
     age: 0,
     front: 0,              // 0..1 sweep progress (left -> right)
     duration: CONFIG.floodDuration,
     sweep: CONFIG.floodSweep,
+    dose,                  // dose level this flood applies (default = CONFIG.floodDose)
     casualties: 0,
   };
 }
@@ -443,6 +449,11 @@ function update(dt) {
     addLedger('Antibiotic has cleared from the dish.', 'info');
   }
 
+  // --- treatment course: administer any dose now due (before the per-bacterium loop so a fresh
+  // flood is live this tick). Per-tick (never skipped at high sim speed) and only while unpaused,
+  // since frame() gates update() on state.paused — so the regimen honours pause AND CONFIG.simSpeed.
+  advanceCourse();
+
   // --- plasmids: age out ---
   for (const p of state.plasmids) p.age += dt;
   state.plasmids = state.plasmids.filter(p => p.age < p.life);
@@ -512,7 +523,7 @@ function update(dt) {
     for (const f of state.floods) {
       // a cell is "under" the drug once the sweep front has passed its x position
       if (b.x <= f.front * CONFIG.size) {
-        exposeToDrug(b, f.gene, CONFIG.floodDose, CONFIG.floodDamage, 1, dt);
+        exposeToDrug(b, f.gene, f.dose, CONFIG.floodDamage, 1, dt);
       }
     }
 
@@ -864,6 +875,8 @@ function cacheEls() {
     'btnSpawn', 'btnPenicillin', 'btnTetracycline', 'btnCipro',
     'btnClearPlasmids', 'btnReset', 'btnPause',
     'gradientGene', 'btnGradient',
+    'courseDrug', 'courseDose', 'courseDoseVal', 'courseInterval', 'courseIntervalVal',
+    'courseDoses', 'courseAdherence', 'courseAdherenceVal', 'btnCourse', 'courseStatus',
     'statLiving', 'statResistant', 'statMultiResistant', 'statPlasmids', 'statNutrients', 'statTick',
     'barPen', 'barTet', 'barCip', 'cntPen', 'cntTet', 'cntCip',
     'chart', 'tooltip', 'ledger',
@@ -939,6 +952,8 @@ function updateStats() {
   els.cntPen.textContent = `${c.pen} · μ${meanPen.toFixed(1)}`;
   els.cntTet.textContent = `${c.tet} · μ${meanTet.toFixed(1)}`;
   els.cntCip.textContent = `${c.cip} · μ${meanCip.toFixed(1)}`;
+
+  renderCourseStatus(); // live course indicator ticks with the stats refresh (and the countdown)
 }
 
 // ---- actions ----
@@ -954,19 +969,21 @@ function spawnBacteria(n = CONFIG.spawnBatch, staggerAge = false) {
   addLedger(`Spawned ${n} bacteria into the dish.`, 'info');
 }
 
-function floodAntibiotic(gene) {
+function floodAntibiotic(gene, dose = CONFIG.floodDose, log = true) {
   const a = ANTIBIOTICS[gene];
   // Don't STACK floods of the same drug — that would multiply the efflux tax and wrongly
-  // starve resistant cells when the button is mashed. Instead re-arm the existing front.
-  // Different drugs still combine.
+  // starve resistant cells when the button is mashed. Instead re-arm the existing front and
+  // adopt the new dose. Different drugs still combine. `log=false` lets the treatment course
+  // drive the mechanic but write its own ledger line instead of the generic flood message.
   const existing = state.floods.find(f => f.gene === gene);
   if (existing) {
     existing.age = 0;
     existing.front = 0;
-    addLedger(`💉 Re-flooded ${a.name} — the drug front resets and sweeps again.`, 'flood');
+    existing.dose = dose;
+    if (log) addLedger(`💉 Re-flooded ${a.name} — the drug front resets and sweeps again.`, 'flood');
   } else {
-    state.floods.push(createFlood(gene));
-    addLedger(`💉 Flooded ${a.name} (targets ${a.target}). Susceptible cells dying.`, 'flood');
+    state.floods.push(createFlood(gene, dose));
+    if (log) addLedger(`💉 Flooded ${a.name} (targets ${a.target}). Susceptible cells dying.`, 'flood');
   }
   // Snap the stats panel to the new reality immediately — otherwise the periodic refresh
   // can lag the fast flood die-off by up to ~0.25 s right after the user acts.
@@ -996,6 +1013,112 @@ function syncGradientButton() {
   els.btnGradient.classList.toggle('active', on);
 }
 
+// ---- treatment course (a scheduled, repeating drug regimen) ----
+// Dose strength is on the same MIC-band scale as a cell's MIC: level 1 -> "1× MIC", 2 -> "10×",
+// 3 -> "100×", 4 -> "1000×" (mirrors the inspector tooltip's band labels).
+function doseLabel(dose) { return `${10 ** (dose - 1)}× MIC`; }
+
+// Read the Treatment Course controls and arm a regimen on state.course. The doses themselves are
+// delivered per-tick by advanceCourse() (inside update()), so they respect pause and sim speed.
+function startCourse() {
+  if (state.course) return;
+  const drug = els.courseDrug.value;
+  const dose = clamp(parseInt(els.courseDose.value, 10) || 1, 1, CONFIG.micMax);
+  const intervalSec = Math.max(0.5, parseFloat(els.courseInterval.value) || 1);
+  const doses = Math.max(1, parseInt(els.courseDoses.value, 10) || 1);
+  const adherence = clamp((parseFloat(els.courseAdherence.value) || 0) / 100, 0, 1);
+  state.course = {
+    drug,
+    dose,
+    intervalTicks: Math.max(1, Math.round(intervalSec * 60)),
+    dosesRemaining: doses,
+    nextDoseTick: state.tick,        // first dose lands on the next tick
+    adherence,
+    total: doses,
+    taken: 0,
+    missed: 0,
+    resistantAtStart: colonyCounts().resistant,
+  };
+  addLedger(`🩺 Treatment course started: ${doses} × ${ANTIBIOTICS[drug].name} at ${doseLabel(dose)}, ` +
+            `every ${intervalSec}s, ${Math.round(adherence * 100)}% adherence.`, 'flood');
+  syncCourseUI();
+  updateStats();
+}
+
+// Per-tick dosing engine, called from update(). When a scheduled dose comes due, roll against
+// adherence: a kept dose floods the chosen drug at the chosen strength (reusing the flood
+// mechanic); a skipped dose is logged as a missed dose. Either way the next dose is scheduled and
+// the counter ticks down; the course ends (with a summary) once no doses remain.
+function advanceCourse() {
+  const c = state.course;
+  if (!c || c.dosesRemaining <= 0 || state.tick < c.nextDoseTick) return;
+  const n = c.taken + c.missed + 1;   // 1-based index of this dose, for the ledger
+  if (Math.random() < c.adherence) {
+    c.taken++;
+    floodAntibiotic(c.drug, c.dose, false); // reuse the flood mechanic; course writes its own line
+    addLedger(`💊 Dose ${n}/${c.total} administered — ${ANTIBIOTICS[c.drug].name} at ${doseLabel(c.dose)}.`, 'flood');
+  } else {
+    c.missed++;
+    addLedger(`🚫 Dose ${n}/${c.total} MISSED — non-adherence (${ANTIBIOTICS[c.drug].name} not given).`, 'wipe');
+  }
+  c.dosesRemaining--;
+  c.nextDoseTick = state.tick + c.intervalTicks;
+  if (c.dosesRemaining <= 0) endCourse(false);
+}
+
+// End the active course and log a summary — including whether resistance rose over the course
+// (resistant-cell count at start vs now), the teaching payoff of the whole regimen.
+function endCourse(stopped) {
+  const c = state.course;
+  if (!c) return;
+  const resNow = colonyCounts().resistant;
+  const delta = resNow - c.resistantAtStart;
+  const trend = delta > 0 ? `rose ${c.resistantAtStart} → ${resNow}`
+              : delta < 0 ? `fell ${c.resistantAtStart} → ${resNow}`
+              : `held at ${resNow}`;
+  const verdict = delta > 0 ? ' — resistance INCREASED over the course.'
+                : delta < 0 ? ' — resistance fell over the course.'
+                : ' — resistance unchanged.';
+  const head = stopped
+    ? `Treatment course stopped early (${c.dosesRemaining} dose${c.dosesRemaining === 1 ? '' : 's'} skipped)`
+    : 'Treatment course complete';
+  addLedger(`🧪 ${head}: ${c.taken} taken, ${c.missed} missed. Resistant cells ${trend}${verdict}`,
+            delta > 0 ? 'wipe' : 'info');
+  state.course = null;
+  syncCourseUI();
+  updateStats();
+}
+
+function toggleCourse() {
+  if (state.course) endCourse(true);
+  else startCourse();
+}
+
+// Live course indicator: doses left, next-dose countdown (simulated seconds), missed count.
+function renderCourseStatus() {
+  if (!els.courseStatus) return;
+  const c = state.course;
+  if (!c) { els.courseStatus.innerHTML = '<span class="course-idle">No active course</span>'; return; }
+  const secs = Math.max(0, (c.nextDoseTick - state.tick) / 60);
+  els.courseStatus.innerHTML =
+    `<span><b>${c.dosesRemaining}</b> left</span>` +
+    `<span>next in <b>${secs.toFixed(1)}s</b></span>` +
+    `<span><b>${c.missed}</b> missed</span>`;
+}
+
+// Reflect course state in the UI: button label/highlight, lock the inputs while a course runs so
+// it can't be edited mid-flight, and refresh the live indicator.
+function syncCourseUI() {
+  if (!els.btnCourse) return;
+  const active = !!state.course;
+  els.btnCourse.textContent = active ? '⏹ Stop Course' : '▶ Start Course';
+  els.btnCourse.classList.toggle('active', active);
+  for (const el of [els.courseDrug, els.courseDose, els.courseInterval, els.courseDoses, els.courseAdherence]) {
+    if (el) el.disabled = active;
+  }
+  renderCourseStatus();
+}
+
 function clearPlasmids() {
   const n = state.plasmids.length;
   state.plasmids = [];
@@ -1013,10 +1136,12 @@ function resetSim() {
   state.mutationsThisWindow = 0;
   state.hgtThisWindow = 0;
   state.gradient = null;
+  state.course = null;
   state.history = [];
   state.hovered = null;
   if (els.tooltip) els.tooltip.hidden = true;
   syncGradientButton();
+  syncCourseUI();
   els.ledger.innerHTML = '';
   // seed
   for (let i = 0; i < 40; i++) { const p = randomDishPoint(); state.nutrients.push(createNutrient(p.x, p.y)); }
@@ -1047,6 +1172,7 @@ function applyPreset(key) {
   state.plasmids = [];
   state.floods = [];
   state.gradient = null;
+  state.course = null;
   state.tick = 0;
   state.generation = 0;
   state.nutrientAccumulator = 0;
@@ -1083,6 +1209,7 @@ function applyPreset(key) {
     if (els.gradientGene) els.gradientGene.value = p.gradient; // keep the toggle in sync
   }
   syncGradientButton();
+  syncCourseUI();
   addLedger(`Preset loaded — ${p.label}: ${p.blurb}`, 'info');
   updateStats();
 }
@@ -1118,6 +1245,18 @@ function bindUI() {
     state.paused = !state.paused;
     els.btnPause.textContent = state.paused ? '▶ Resume' : '⏸ Pause';
   });
+
+  // treatment course: live slider labels + start/stop toggle
+  els.courseDose.addEventListener('input', e => {
+    els.courseDoseVal.textContent = doseLabel(parseInt(e.target.value, 10) || 1);
+  });
+  els.courseInterval.addEventListener('input', e => {
+    els.courseIntervalVal.textContent = `${e.target.value}s`;
+  });
+  els.courseAdherence.addEventListener('input', e => {
+    els.courseAdherenceVal.textContent = `${e.target.value}%`;
+  });
+  els.btnCourse.addEventListener('click', toggleCourse);
 
   // click the dish to drop a cluster of bacteria
   canvas.addEventListener('click', e => {
@@ -1206,6 +1345,12 @@ function init() {
   els.mutationRateVal.textContent = `${parseFloat(els.mutationRate.value).toFixed(1)}%`;
   els.nutrientRateVal.textContent = `${els.nutrientRate.value}/s`;
   els.simSpeedVal.textContent = `${CONFIG.simSpeed.toFixed(2)}×`;
+
+  // treatment-course control labels (the sliders' DOM values are the source of truth)
+  els.courseDoseVal.textContent = doseLabel(parseInt(els.courseDose.value, 10) || 1);
+  els.courseIntervalVal.textContent = `${els.courseInterval.value}s`;
+  els.courseAdherenceVal.textContent = `${els.courseAdherence.value}%`;
+  syncCourseUI();
 
   // seed world
   for (let i = 0; i < 40; i++) { const p = randomDishPoint(); state.nutrients.push(createNutrient(p.x, p.y)); }

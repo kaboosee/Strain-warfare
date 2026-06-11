@@ -238,6 +238,65 @@ input[type="range"]::-moz-range-thumb {
 }
 .gradient-control .btn { margin-bottom: 0; }
 
+/* ---------- treatment course ---------- */
+/* collapsible header — the panel starts minimised (mirrors the Glossary's <details> pattern),
+   so the new controls don't crowd the sidebar until the user opens them */
+.course-collapse summary.panel-head {
+  cursor: pointer;
+  list-style: none;
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--accent);
+}
+.course-collapse summary.panel-head::-webkit-details-marker { display: none; }
+.course-collapse summary.panel-head::after { content: '▸'; color: var(--text-dim); }
+.course-collapse[open] summary.panel-head::after { content: '▾'; }
+.course-body { margin-top: 12px; }
+
+.course-field { margin-bottom: 10px; }
+.course-field label {
+  display: block;
+  font-size: 0.82rem;
+  margin-bottom: 4px;
+  color: var(--text-dim);
+}
+.course-field select,
+.course-field input[type="number"] {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.course-field input[type="number"] { cursor: text; }
+/* greyed-out look for the locked controls while a course is running */
+.course-field select:disabled,
+.course-field input:disabled,
+input[type="range"]:disabled { opacity: 0.5; cursor: not-allowed; }
+.course-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 7px 9px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.course-status b { color: var(--accent); font-weight: 700; }
+.course-idle { color: var(--text-dim); font-style: italic; }
+
 /* ---------- legend (overlay on the dish, bottom-left dead space) ---------- */
 .legend-list {
   list-style: none;

@@ -32,7 +32,7 @@ function seededMath(seed) {
 function makeSim(seed = 12345) {
   let src = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
   src += `\nglobalThis.__sim = { state, CONFIG, update, resetSim, applyPreset, floodAntibiotic,
-    spawnBacteria, frame, MAX_LEDGER, CHART_HISTORY };\n`;
+    spawnBacteria, frame, startCourse, toggleCourse, MAX_LEDGER, CHART_HISTORY };\n`;
 
   let domReady = null, rafCb = null;
   const elCache = {};
@@ -259,6 +259,115 @@ test('same-gene flood refreshes instead of stacking', () => {
   assert.equal(sim.state.floods.length, 1, `same-gene floods stacked (${sim.state.floods.length})`);
   sim.floodAntibiotic('tetracycline');
   assert.equal(sim.state.floods.length, 2, 'different drugs should still combine');
+});
+
+/* ============================================================
+   TREATMENT COURSE — scheduled multi-dose regimen
+   ============================================================ */
+section('Treatment course');
+
+// arm a regimen directly on state.course (the UI path reads the DOM; this exercises the
+// per-tick dosing engine in update(), which is the part that matters)
+function armCourse(sim, opts = {}) {
+  const doses = opts.doses ?? 3;
+  sim.state.course = {
+    drug: opts.drug || 'tetracycline',
+    dose: opts.dose ?? 1,
+    intervalTicks: opts.intervalTicks ?? 30,
+    dosesRemaining: doses,
+    nextDoseTick: sim.state.tick,
+    adherence: opts.adherence ?? 1,
+    total: doses,
+    taken: 0,
+    missed: 0,
+    resistantAtStart: opts.resistantAtStart ?? 0,
+  };
+}
+const ledgerText = (h) => h.elCache.ledger.children.map((c) => c.innerHTML).join('\n');
+
+test('full-adherence course administers every scheduled dose, then ends with a summary', () => {
+  const h = makeSim(20);
+  const { sim, step } = h;
+  sim.applyPreset('baseline'); step(20);
+  armCourse(sim, { drug: 'tetracycline', doses: 3, intervalTicks: 30, adherence: 1 });
+  step(3); // 180 ticks covers 3 doses spaced 30 ticks apart, with margin
+  assert.equal(sim.state.course, null, 'course did not end after all doses were delivered');
+  const text = ledgerText(h);
+  assert((text.match(/administered/g) || []).length === 3, 'expected exactly 3 administered-dose entries');
+  assert(/Treatment course complete/.test(text), 'no completion summary was logged');
+});
+
+test('zero-adherence course logs missed doses and never floods', () => {
+  const h = makeSim(21);
+  const { sim, step } = h;
+  sim.applyPreset('baseline'); step(20);
+  armCourse(sim, { drug: 'penicillin', doses: 3, intervalTicks: 30, adherence: 0 });
+  let everFlooded = false;
+  for (let i = 0; i < 12; i++) { step(0.25); if (sim.state.floods.length) everFlooded = true; }
+  assert(!everFlooded, 'a zero-adherence course must never create a flood');
+  assert.equal(sim.state.course, null, 'course did not end');
+  assert(/MISSED/.test(ledgerText(h)), 'no missed-dose entries were logged');
+});
+
+test('doses fire on the configured interval and the summary compares resistance', () => {
+  const h = makeSim(23);
+  const { sim, step } = h;
+  sim.applyPreset('baseline'); step(20);
+  armCourse(sim, { drug: 'tetracycline', doses: 2, intervalTicks: 120, adherence: 1, resistantAtStart: 5 });
+  step(1); // ~60 ticks: dose 1 fires immediately; dose 2 (needs +120 ticks) does not yet
+  assert.equal(sim.state.course.taken, 1, 'first dose should fire almost immediately');
+  assert.equal(sim.state.course.dosesRemaining, 1, 'second dose should still be pending before the interval elapses');
+  step(2); // +120 ticks: dose 2 fires and the course ends
+  assert.equal(sim.state.course, null, 'course should end after the final dose');
+  assert(/Resistant cells/.test(ledgerText(h)), 'summary should report the resistant-cell comparison');
+});
+
+test('course respects pause: no doses fire while paused', () => {
+  const h = makeSim(22);
+  const { sim, runFrames } = h;
+  sim.resetSim();
+  armCourse(sim, { drug: 'cipro', doses: 4, intervalTicks: 30, adherence: 1 });
+  sim.state.paused = true;
+  runFrames(3); // frames run, but update() is gated on !paused so no tick advances
+  assert.equal(sim.state.course.dosesRemaining, 4, 'doses fired while paused');
+  assert.equal(sim.state.course.taken, 0, 'a dose was administered while paused');
+});
+
+test('startCourse() reads the UI controls and derives the regimen correctly', () => {
+  const h = makeSim(25);
+  const { sim } = h;
+  sim.applyPreset('baseline');
+  Object.assign(h.elCache.courseDrug, { value: 'cipro' });
+  Object.assign(h.elCache.courseDose, { value: '2' });
+  Object.assign(h.elCache.courseInterval, { value: '5' });
+  Object.assign(h.elCache.courseDoses, { value: '4' });
+  Object.assign(h.elCache.courseAdherence, { value: '50' });
+  sim.startCourse();
+  const c = sim.state.course;
+  assert(c, 'startCourse did not arm a course');
+  assert.equal(c.drug, 'cipro', 'wrong drug');
+  assert.equal(c.dose, 2, 'wrong dose level');
+  assert.equal(c.intervalTicks, 300, 'interval seconds not converted to ticks (5s -> 300)');
+  assert.equal(c.dosesRemaining, 4, 'wrong dose count');
+  assert.equal(c.total, 4, 'total should equal the requested dose count');
+  assert.equal(c.adherence, 0.5, 'adherence % not converted to a fraction');
+  assert(Number.isFinite(c.resistantAtStart), 'resistantAtStart not captured');
+  sim.startCourse(); // a second start must NOT clobber the running course
+  assert.equal(sim.state.course, c, 'startCourse overwrote an already-running course');
+  sim.toggleCourse(); // now stop it
+  assert.equal(sim.state.course, null, 'toggleCourse did not stop the running course');
+});
+
+test('stronger course dose overwhelms low-level resistance (dose > MIC kills)', () => {
+  const { sim, step } = makeSim(24);
+  sim.applyPreset('baseline'); step(60);
+  // give the whole colony MIC 1 to tetracycline, then dose at strength 3 (>> their MIC)
+  for (const b of sim.state.bacteria) b.mic.tetracycline = 1;
+  const before = sim.state.bacteria.length;
+  armCourse(sim, { drug: 'tetracycline', doses: 1, intervalTicks: 30, dose: 3, adherence: 1 });
+  step(sim.CONFIG.floodDuration);
+  assert(sim.state.bacteria.length < before * 0.5,
+    `a dose well above the colony's MIC should still kill most cells (${sim.state.bacteria.length}/${before})`);
 });
 
 /* ============================================================

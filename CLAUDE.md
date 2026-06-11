@@ -26,10 +26,12 @@ The file is organised into 10 numbered, commented sections:
 4. **Entity factories** — `createBacterium`, `createNutrient`, `createPlasmid`, `createFlood`.
 5. **Spatial hash** — `SpatialGrid` class; two instances `nutrientGrid`, `plasmidGrid`.
 6. **Simulation step** — `update(dt)`: movement (random walk + chemotaxis toward the
-   nearest sensed nutrient), eating, HGT, floods, reproduction, death.
+   nearest sensed nutrient), eating, HGT, floods, treatment-course dosing (`advanceCourse()`),
+   reproduction, death.
 7. **Rendering** — `render()`: dish, flood overlays, nutrients, plasmids, bacteria.
 8. **Game loop** — `frame()`: fixed-step accumulator (`fixedDt = 1/60`), ~60 FPS.
-9. **UI wiring** — `cacheEls`, `addLedger`, `updateStats`, action fns, `bindUI`.
+9. **UI wiring** — `cacheEls`, `addLedger`, `updateStats`, action fns, `bindUI`, plus the
+   treatment-course fns (`startCourse`/`advanceCourse`/`endCourse`/`toggleCourse`/`syncCourseUI`).
 10. **Init** — `init()` seeds the world, syncs CONFIG from slider DOM values, starts the loop.
 
 ## Key CONFIG tunables
@@ -68,6 +70,13 @@ The file is organised into 10 numbered, commented sections:
 - **Floods**: `floodDuration` (drain WINDOW, not just flavor — see gotcha), `floodSweep`
   (seconds for the front to cross), `floodDamage` (energy/s drained from susceptible cells),
   `effluxCost` (tax resistant cells pay — a MODEST 2/s; resistance must be survivable).
+- **Treatment Course** (scheduled regimen, NOT CONFIG-driven): lives on `state.course` =
+  `{drug, dose, intervalTicks, dosesRemaining, nextDoseTick, adherence, total, taken, missed,
+  resistantAtStart}` or `null`. Armed from the "Treatment Course" panel sliders by `startCourse()`;
+  `advanceCourse()` (per-tick in `update()`) delivers a due dose by calling `floodAntibiotic(drug,
+  dose, /*log*/false)` if an adherence roll passes, else logs a missed dose; `endCourse()` logs a
+  summary comparing `resistantAtStart` vs now. Doses are scaled by the dose-strength slider (1–4 =
+  1×/10×/100×/1000× MIC), so a strong course can overwhelm low-MIC cells.
 - **MEGA-plate gradient** (Kishony): `gradientBands` (relative-MIC per band, left→right),
   `gradientRefugeFrac` (share of dish width given to the drug-free band 0), `gradientKill`
   (susceptible energy/s drain, scaled by `doseResponse` = log10(conc)+1), `gradientEffluxScale`
@@ -83,7 +92,9 @@ The file is organised into 10 numbered, commented sections:
 - **nutrient**: `{ x, y }` (gains a transient `eaten` flag when consumed)
 - **plasmid**: `{ x, y, gene, mic, age, life }` — carries an MIC LEVEL; on pickup a cell raises
   its own `mic[gene]` to match (gains a transient `absorbed` flag).
-- **flood**: `{ gene, age, front, duration, sweep, casualties }` (applies `CONFIG.floodDose`)
+- **flood**: `{ gene, age, front, duration, sweep, dose, casualties }` — `dose` is the MIC-band
+  level this flood applies (default `CONFIG.floodDose`; a treatment course passes its own). BOTH
+  `exposeToDrug` (in `update()`) and `localDose()` read `f.dose`, never `CONFIG.floodDose` directly.
 
 ## Known gotchas
 - **Resistance must be COSTLY or MIC ratchets to the max for free.** With no standing cost,
@@ -178,7 +189,13 @@ The file is organised into 10 numbered, commented sections:
   cadence (`frameCount`). The mutation/HGT ledger flushes live in the same per-tick block.
 - **Floods of the same drug REFRESH, they don't stack** (`floodAntibiotic()` re-arms an
   existing same-gene flood). Stacking multiplied the efflux tax and wrongly starved resistant
-  cells when the button was mashed. Different drugs still combine.
+  cells when the button was mashed. Different drugs still combine. NOTE: a re-arm also adopts the
+  new `dose`, so a treatment-course dose re-arming an existing same-drug flood updates its strength.
+- **Treatment-course dosing is per-tick in `update()` (`advanceCourse()`), NOT in `frame()`** —
+  same reasoning as history sampling: keying doses to `state.tick` makes them honour BOTH pause
+  (update() is gated on `state.paused`) and `CONFIG.simSpeed` (more ticks/sec = doses arrive sooner
+  in real time but on schedule in sim time), and never skips a dose at high sim speed. The course's
+  "seconds between doses" and countdown are SIMULATED seconds (`intervalTicks = round(sec*60)`).
 - **Slider defaults in `index.html` are the source of truth at startup** — `init()` reads
   `CONFIG` values from the slider DOM `value`s, so changing a default means editing the HTML
   attribute (and its label span), not just `CONFIG`.
