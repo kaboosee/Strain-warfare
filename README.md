@@ -45,6 +45,13 @@ with its own energy, age, and set of resistance genes.
 
   A flood sweeps across the dish as a translucent colored wave. Any cell behind the front
   **without** the matching resistance gene loses energy fast and dies within a few seconds.
+- **MEGA-plate gradient** (the Kishony 2016 experiment) — instead of a transient flood, lay
+  down a **standing antibiotic gradient**: the dish splits left→right into a drug-free
+  **refuge** and bands of rising concentration (1× → 10× → 100× → 1000× MIC). Susceptible
+  cells survive only in the refuge; a resistant lineage that arises there can march
+  band-by-band into ever-higher doses, recreating the famous evolving-front image. (With
+  aggressive dosing the colony sometimes goes extinct before resistance evolves — exactly
+  why monotherapy is risky.)
 
 ### The energy economy
 
@@ -68,17 +75,22 @@ carrying capacity; antibiotics are the dominant cause of death.
 - **＋ Spawn Bacteria** — drop a fresh batch of susceptible cells into the dish.
 - **💉 Flood Penicillin / Tetracycline / Ciprofloxacin** — sweep that antibiotic across
   the dish.
+- **🧬 MEGA-plate gradient** — pick a drug and toggle a standing concentration gradient
+  (see above). Toggle again to clear it.
 - **🧹 Clear Plasmids** — remove all floating plasmids (stops HGT spread in its tracks).
 - **↺ Reset Sim** — wipe everything and start a fresh colony.
 - **⏸ Pause / ▶ Resume** — freeze or resume the simulation.
 
 ### Stats & Ledger (right sidebar)
 Live counters for **Living**, **Resistant**, **Plasmids**, and **Nutrients**, a per-drug
-resistance breakdown, and an **Event Ledger** logging mutations, HGT events, floods, and
-colony wipe-outs.
+resistance breakdown, a **live history chart** (population in white vs. the three
+resistance percentages over the last few minutes), and an **Event Ledger** logging
+mutations, HGT events, floods, and colony wipe-outs.
 
-### Tip
-**Click anywhere inside the dish** to seed a small cluster of bacteria at that spot.
+### Tips
+- **Click anywhere inside the dish** to seed a small cluster of bacteria at that spot.
+- **Hover any cell** to inspect it — a tooltip shows its resistance genes, energy,
+  age, efflux state, and remaining plasmid slots.
 
 ---
 

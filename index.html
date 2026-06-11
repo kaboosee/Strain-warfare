@@ -46,6 +46,17 @@
         <button class="btn drug-penicillin" id="btnPenicillin">💉 Flood Penicillin</button>
         <button class="btn drug-tetracycline" id="btnTetracycline">💉 Flood Tetracycline</button>
         <button class="btn drug-cipro" id="btnCipro">💉 Flood Ciprofloxacin</button>
+
+        <div class="gradient-control">
+          <label for="gradientGene">MEGA-plate gradient</label>
+          <select id="gradientGene">
+            <option value="penicillin">Penicillin</option>
+            <option value="tetracycline">Tetracycline</option>
+            <option value="cipro">Ciprofloxacin</option>
+          </select>
+          <button class="btn" id="btnGradient">🧬 Set MEGA-plate</button>
+        </div>
+
         <button class="btn btn-ghost" id="btnClearPlasmids">🧹 Clear Plasmids</button>
         <button class="btn btn-danger" id="btnReset">↺ Reset Sim</button>
         <button class="btn btn-ghost" id="btnPause">⏸ Pause</button>
@@ -67,6 +78,7 @@
     <!-- ============ CANVAS ============ -->
     <section class="stage">
       <canvas id="dish" width="800" height="800"></canvas>
+      <div id="tooltip" class="tooltip" hidden></div>
     </section>
 
     <!-- ============ RIGHT SIDEBAR: STATS + LEDGER ============ -->
@@ -89,6 +101,10 @@
           <div class="bar-row"><span>Tetracycline</span><div class="bar"><i class="drug-tetracycline" id="barTet"></i></div><span class="bar-val" id="cntTet">0 · 0%</span></div>
           <div class="bar-row"><span>Cipro</span><div class="bar"><i class="drug-cipro" id="barCip"></i></div><span class="bar-val" id="cntCip">0 · 0%</span></div>
         </div>
+        <h3 class="breakdown-title">History</h3>
+        <p class="caption">Population (white, vs. max) and resistance % per gene over the last ~3 min.</p>
+        <canvas id="chart" class="chart" width="280" height="110"></canvas>
+
         <p class="muted" id="statTick">Tick 0 · Gen 0 · — FPS</p>
       </section>
 

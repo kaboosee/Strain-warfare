@@ -58,6 +58,12 @@ The file is organised into 10 numbered, commented sections:
 - **HGT/plasmids**: `plasmidDropChance`, `plasmidLifespan`, `plasmidPickupRadius`.
 - **Floods**: `floodDuration`, `floodSweep` (seconds for the front to cross), `floodDamage`
   (energy/s drained from susceptible cells), `effluxCost` (tax resistant cells pay).
+- **MEGA-plate gradient** (Kishony): `gradientBands` (relative-MIC per band, left→right),
+  `gradientRefugeFrac` (share of dish width given to the drug-free band 0), `gradientKill`
+  (susceptible energy/s drain, scaled by `doseResponse` = log10(conc)+1), `gradientEffluxScale`
+  (resistant efflux tax, same dose scaling). `state.gradient` is `{gene}` or `null`; band
+  geometry lives in `bandBounds()`/`bandIndex()` (used by BOTH `update()` and `render()` so
+  they agree). See gotcha below.
 - **Sim**: `simSpeed`, `fixedDt`, `maxPopulation`.
 
 ## Core entity shapes
@@ -97,6 +103,18 @@ The file is organised into 10 numbered, commented sections:
   ~60 simulated seconds. **Confirm `generation` climbs above 0 within a few seconds and the
   un-flooded population sustains itself** (and that a flood collapses it to resistant-only
   survivors). `node --check app.js` only catches syntax, not extinction.
+- **MEGA-plate gradient has two opposing failure modes — verified headless.** (1) If
+  `gradientKill` is too low, well-fed susceptibles SURVIVE bands above their MIC (wrong —
+  MIC means inhibitory). It must be net-lethal even at the 1× band despite the cell eating,
+  so it's anchored at `floodDamage` (70). (2) If the drug-free refuge is too NARROW, the
+  established colony bleeds across the absorbing band-1 boundary and goes fully extinct
+  before any resistant mutant arises — so `gradientRefugeFrac` is a generous 0.5. Tuned
+  outcome (gradient applied at steady state): treated bands end up resistant-ONLY, the
+  refuge stays mixed, the resistant front can reach 1000× MIC, and only ~1/8 runs go extinct
+  (a legitimate "monotherapy cleared it first" result). Because resistance is BINARY, one
+  pen-R cell survives every band, so the advance is "refuge throws a mutant → it colonizes
+  the empty treated bands," not a true per-band stepwise climb (that would need resistance
+  *levels* — deferred). `update()` damage and `render()` overlay both use `bandBounds()`.
 - **Floods sweep by X-POSITION, not radially.** A cell is "under" a drug once
   `b.x <= flood.front * CONFIG.size`. The leading edge moves left→right over `floodSweep`
   seconds. Both `update()` (damage) and `render()` (overlay) rely on this same rule.

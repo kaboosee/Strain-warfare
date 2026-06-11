@@ -95,6 +95,25 @@ const CONFIG = {
   floodDamage: 70,      // energy/sec drained from susceptible cells under the drug
   effluxCost: 9,        // extra energy/sec resistant cells pay to pump it out
 
+  // --- MEGA-PLATE GRADIENT (Kishony 2016) ---
+  // A standing spatial gradient of ONE drug instead of a transient sweep. The dish is
+  // divided left->right into bands of increasing concentration (relative MIC). Susceptible
+  // cells survive only in the drug-free refuge (band 0); resistant lineages advance into
+  // the treated bands as a front. We keep resistance BINARY — dose-scaled costs (not
+  // resistance levels) produce the graded advance: kill rate scales with local conc, and
+  // efflux gets costlier at higher conc so the top bands are survivable-but-expensive.
+  gradientBands: [0, 1, 10, 100, 1000],  // relative MIC per band, low x -> high x
+  // The drug-free refuge (band 0) takes a generous share of the dish so a healthy
+  // susceptible colony lives there and keeps throwing resistant mutants; the remaining
+  // width splits equally among the treated bands. Without a viable refuge the colony just
+  // goes extinct the moment the gradient turns on.
+  gradientRefugeFrac: 0.5,
+  // Kill must be net-lethal even at the lowest treated band (1× MIC) despite the cell still
+  // eating — otherwise well-fed susceptibles survive bands above their MIC, which is wrong.
+  // Anchored at floodDamage so band 1× is "at/above MIC = inhibitory", scaling deeper in.
+  gradientKill: 70,       // energy/s per (log10 conc + 1) drained from susceptibles in a band
+  gradientEffluxScale: 0.6, // efflux tax multiplier per (log10 conc + 1) for resistant cells
+
   // simulation
   simSpeed: 1,
   fixedDt: 1 / 60,      // physics step
@@ -114,9 +133,13 @@ const state = {
   paused: false,
   nutrientAccumulator: 0,
   mutationsThisWindow: 0, // batched so the ledger isn't spammed
+  gradient: null,         // { gene } when a MEGA-plate gradient is active, else null
+  history: [],            // ring buffer of {living,penPct,tetPct,cipPct} samples for the chart
+  hovered: null,          // bacterium currently under the cursor (cell inspector)
 };
 
 let canvas, ctx;
+let chartCanvas, chartCtx;
 
 /* ============================================================
    3. UTILITIES
@@ -138,6 +161,37 @@ function randomDishPoint(margin = 8) {
 
 function hasAnyResistance(b) {
   return b.resistanceGenes.penicillin || b.resistanceGenes.tetracycline || b.resistanceGenes.cipro;
+}
+
+// MEGA-plate band layout: the leftmost gradientRefugeFrac of the dish is the drug-free
+// refuge (band 0); the rest splits equally among the treated bands (1..n-1).
+// bandBounds() returns the n+1 x-pixel edges so update() and render() agree exactly.
+function bandBounds() {
+  const n = CONFIG.gradientBands.length;
+  const rf = CONFIG.gradientRefugeFrac;
+  const treated = n - 1;
+  const bounds = [0, rf * CONFIG.size];
+  for (let i = 1; i <= treated; i++) {
+    bounds.push((rf + (i / treated) * (1 - rf)) * CONFIG.size);
+  }
+  return bounds;
+}
+function bandIndex(x) {
+  const n = CONFIG.gradientBands.length;
+  const rf = CONFIG.gradientRefugeFrac;
+  const frac = x / CONFIG.size;
+  if (frac < rf) return 0;
+  const treated = n - 1;
+  const t = (frac - rf) / (1 - rf);
+  return clamp(1 + Math.floor(t * treated), 1, n - 1);
+}
+function localConc(x) {
+  return CONFIG.gradientBands[bandIndex(x)];
+}
+// Dose response curve: returns log10(conc)+1 so band 1x -> 1, 10x -> 2, 100x -> 3, 1000x -> 4.
+// (conc 0 -> 0, i.e. the refuge is harmless.)
+function doseResponse(conc) {
+  return conc > 0 ? Math.log10(conc) + 1 : 0;
 }
 
 // How many resistance genes a cell carries (0..3) — drives the standing fitness cost.
@@ -353,6 +407,22 @@ function update(dt) {
       }
     }
 
+    // MEGA-plate gradient: a standing dose that scales with the cell's band (see localConc).
+    // Same binary survive/pay structure as a flood, but dose-scaled so the front advances
+    // band-by-band: susceptibles die faster the deeper they wander; resistant cells survive
+    // every band but pay a steeper efflux tax the higher the concentration.
+    if (state.gradient) {
+      const dose = doseResponse(localConc(b.x));
+      if (dose > 0) {
+        if (b.resistanceGenes[state.gradient.gene]) {
+          b.energy -= CONFIG.effluxCost * CONFIG.gradientEffluxScale * dose * dt;
+          b.efflux = 1;
+        } else {
+          b.energy -= CONFIG.gradientKill * dose * dt;
+        }
+      }
+    }
+
     // eat nearby nutrients
     const near = nutrientGrid.queryNearby(b.x, b.y);
     for (const n of near) {
@@ -478,6 +548,29 @@ function render() {
     }
   }
 
+  // MEGA-plate gradient: standing concentration bands (left refuge -> right max dose)
+  if (state.gradient) {
+    const [r, g, b] = ANTIBIOTICS[state.gradient.gene].rgb;
+    const bands = CONFIG.gradientBands;
+    const bounds = bandBounds();
+    for (let i = 0; i < bands.length; i++) {
+      const x0 = bounds[i], x1 = bounds[i + 1], w = x1 - x0;
+      const dose = doseResponse(bands[i]);          // 0..4
+      ctx.fillStyle = `rgba(${r},${g},${b},${0.06 * dose})`;
+      ctx.fillRect(x0, 0, w, CONFIG.size);
+      // band divider + concentration label
+      if (i > 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillRect(x0 - 0.5, 0, 1, CONFIG.size);
+      }
+      ctx.fillStyle = `rgba(${r},${g},${b},0.85)`;
+      ctx.font = '600 12px "Segoe UI", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(bands[i] === 0 ? 'refuge' : `${bands[i]}× MIC`, x0 + w / 2, 18);
+    }
+    ctx.textAlign = 'left';
+  }
+
   // nutrients
   ctx.fillStyle = '#5fd07a';
   for (const n of state.nutrients) {
@@ -524,6 +617,16 @@ function render() {
     }
   }
 
+  // cell inspector: highlight ring around the hovered cell
+  if (state.hovered && !state.hovered.dead) {
+    const h = state.hovered;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, CONFIG.bactRadius + 5, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
   ctx.restore();
 
   // dish rim
@@ -532,6 +635,50 @@ function render() {
   ctx.strokeStyle = 'rgba(255,255,255,0.06)';
   ctx.lineWidth = 2;
   ctx.stroke();
+}
+
+// Live time-series chart: population (white, scaled to maxPopulation) plus the three
+// per-gene resistance percentages, over a rolling window of history samples.
+function renderChart() {
+  if (!chartCtx) return;
+  const W = chartCanvas.width, H = chartCanvas.height;
+  const cc = chartCtx;
+  cc.clearRect(0, 0, W, H);
+  cc.fillStyle = '#0f141c';
+  cc.fillRect(0, 0, W, H);
+
+  // gridlines at 25/50/75%
+  cc.strokeStyle = 'rgba(255,255,255,0.06)';
+  cc.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    const y = (i / 4) * H;
+    cc.beginPath(); cc.moveTo(0, y); cc.lineTo(W, y); cc.stroke();
+  }
+
+  const hist = state.history;
+  if (hist.length < 2) return;
+  const n = hist.length;
+  const xAt = i => (i / (n - 1)) * W;
+
+  // helper: draw a polyline for a value accessor mapped 0..1 (1 = top)
+  const line = (accessor, color, width) => {
+    cc.strokeStyle = color;
+    cc.lineWidth = width;
+    cc.beginPath();
+    for (let i = 0; i < n; i++) {
+      const v = clamp(accessor(hist[i]), 0, 1);
+      const y = H - v * H;
+      if (i === 0) cc.moveTo(xAt(i), y); else cc.lineTo(xAt(i), y);
+    }
+    cc.stroke();
+  };
+
+  // population scaled against carrying-capacity-ish ceiling for readability
+  const popMax = CONFIG.maxPopulation;
+  line(s => s.living / popMax, 'rgba(230,234,240,0.85)', 1.6);
+  line(s => s.penPct / 100, ANTIBIOTICS.penicillin.color, 1.4);
+  line(s => s.tetPct / 100, ANTIBIOTICS.tetracycline.color, 1.4);
+  line(s => s.cipPct / 100, ANTIBIOTICS.cipro.color, 1.4);
 }
 
 /* ============================================================
@@ -563,7 +710,7 @@ function frame(now) {
   render();
 
   // refresh stats ~4x/sec for readability
-  if (state.tick % 15 === 0 || state.paused) updateStats();
+  if (state.tick % 15 === 0 || state.paused) { updateStats(); renderChart(); }
 
   requestAnimationFrame(frame);
 }
@@ -579,14 +726,16 @@ function cacheEls() {
     'simSpeed', 'simSpeedVal',
     'btnSpawn', 'btnPenicillin', 'btnTetracycline', 'btnCipro',
     'btnClearPlasmids', 'btnReset', 'btnPause',
+    'gradientGene', 'btnGradient',
     'statLiving', 'statResistant', 'statMultiResistant', 'statPlasmids', 'statNutrients', 'statTick',
     'barPen', 'barTet', 'barCip', 'cntPen', 'cntTet', 'cntCip',
-    'ledger',
+    'chart', 'tooltip', 'ledger',
   ].forEach(id => { els[id] = document.getElementById(id); });
 }
 
 // ---- ledger ----
 const MAX_LEDGER = 120;
+const CHART_HISTORY = 180; // rolling window of per-second samples for the live chart
 function addLedger(msg, kind = 'info') {
   const time = `${String(((state.tick / 60) | 0) / 60 | 0).padStart(2, '0')}:${String(((state.tick / 60) | 0) % 60).padStart(2, '0')}`;
   const entry = document.createElement('div');
@@ -631,6 +780,13 @@ function updateStats() {
   els.cntPen.textContent = `${pen} · ${pct(pen)}%`;
   els.cntTet.textContent = `${tet} · ${pct(tet)}%`;
   els.cntCip.textContent = `${cip} · ${pct(cip)}%`;
+
+  // sample the rolling history for the time-series chart (~once/sec), reusing the counts
+  // already computed above so there's no second pass over the colony.
+  if (state.tick % 60 === 0) {
+    state.history.push({ living, penPct: pct(pen), tetPct: pct(tet), cipPct: pct(cip) });
+    if (state.history.length > CHART_HISTORY) state.history.shift();
+  }
 }
 
 // ---- actions ----
@@ -655,6 +811,29 @@ function floodAntibiotic(gene) {
   updateStats();
 }
 
+// Toggle the MEGA-plate gradient. Activating it sets a standing dose field of one drug;
+// toggling again (or picking it while active) clears it back to a normal open dish.
+function toggleGradient() {
+  const gene = els.gradientGene.value;
+  if (state.gradient && state.gradient.gene === gene) {
+    state.gradient = null;
+    addLedger('MEGA-plate gradient cleared — dish is open again.', 'info');
+  } else {
+    state.gradient = { gene };
+    const a = ANTIBIOTICS[gene];
+    addLedger(`🧬 MEGA-plate gradient set: ${a.name} in bands up to ${CONFIG.gradientBands[CONFIG.gradientBands.length - 1]}× MIC. Only the refuge is safe for susceptibles.`, 'flood');
+  }
+  syncGradientButton();
+  updateStats();
+}
+
+function syncGradientButton() {
+  if (!els.btnGradient) return;
+  const on = !!state.gradient;
+  els.btnGradient.textContent = on ? '⏹ Clear MEGA-plate' : '🧬 Set MEGA-plate';
+  els.btnGradient.classList.toggle('active', on);
+}
+
 function clearPlasmids() {
   const n = state.plasmids.length;
   state.plasmids = [];
@@ -670,6 +849,10 @@ function resetSim() {
   state.generation = 0;
   state.nutrientAccumulator = 0;
   state.mutationsThisWindow = 0;
+  state.gradient = null;
+  state.history = [];
+  state.hovered = null;
+  syncGradientButton();
   els.ledger.innerHTML = '';
   // seed
   for (let i = 0; i < 40; i++) { const p = randomDishPoint(); state.nutrients.push(createNutrient(p.x, p.y)); }
@@ -700,6 +883,7 @@ function bindUI() {
   els.btnTetracycline.addEventListener('click', () => floodAntibiotic('tetracycline'));
   els.btnCipro.addEventListener('click', () => floodAntibiotic('cipro'));
   els.btnClearPlasmids.addEventListener('click', clearPlasmids);
+  els.btnGradient.addEventListener('click', toggleGradient);
   els.btnReset.addEventListener('click', resetSim);
   els.btnPause.addEventListener('click', () => {
     state.paused = !state.paused;
@@ -716,6 +900,49 @@ function bindUI() {
       state.bacteria.push(createBacterium(x + rand(-8, 8), y + rand(-8, 8)));
     }
   });
+
+  // cell inspector: hover to inspect the nearest bacterium under the cursor
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * CONFIG.size;
+    const y = ((e.clientY - rect.top) / rect.height) * CONFIG.size;
+    const pickR = CONFIG.bactRadius + 4;
+    let best = null, bestD = pickR * pickR;
+    for (const b of state.bacteria) {
+      const d = dist2(x, y, b.x, b.y);
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    state.hovered = best;
+    showTooltip(best, e.clientX - rect.left, e.clientY - rect.top);
+  });
+  canvas.addEventListener('mouseleave', () => {
+    state.hovered = null;
+    if (els.tooltip) els.tooltip.hidden = true;
+  });
+}
+
+// Render the inspector tooltip card for a hovered cell (or hide it).
+function showTooltip(b, px, py) {
+  const tip = els.tooltip;
+  if (!tip) return;
+  if (!b) { tip.hidden = true; return; }
+  const genes = GENES.filter(g => b.resistanceGenes[g]).map(g => ANTIBIOTICS[g].name);
+  const resLine = genes.length ? genes.join(', ') : 'Susceptible (no resistance)';
+  tip.innerHTML =
+    `<div class="tip-title">${genes.length ? 'Resistant cell' : 'Susceptible cell'}</div>` +
+    `<div><span>Resistance</span><b>${resLine}</b></div>` +
+    `<div><span>Energy</span><b>${b.energy.toFixed(0)}</b></div>` +
+    `<div><span>Age</span><b>${b.age.toFixed(1)} / ${b.lifespan.toFixed(0)} s</b></div>` +
+    `<div><span>Efflux</span><b>${b.efflux > 0 ? 'active' : 'idle'}</b></div>` +
+    `<div><span>Plasmid slots</span><b>${b.plasmidSlots}</b></div>`;
+  tip.hidden = false;
+  // position next to the cursor (coords are relative to the canvas; offset by the canvas's
+  // position inside its container), flipping left near the right edge
+  const offset = 14;
+  const flip = px + offset + tip.offsetWidth > canvas.clientWidth;
+  const x = canvas.offsetLeft + (flip ? px - offset - tip.offsetWidth : px + offset);
+  tip.style.left = `${x}px`;
+  tip.style.top = `${canvas.offsetTop + py + offset}px`;
 }
 
 /* ============================================================
@@ -726,7 +953,10 @@ function init() {
   canvas = document.getElementById('dish');
   ctx = canvas.getContext('2d');
   cacheEls();
+  chartCanvas = els.chart;
+  if (chartCanvas) chartCtx = chartCanvas.getContext('2d');
   bindUI();
+  syncGradientButton();
 
   // sync slider config with default DOM values
   CONFIG.mutationRate = parseFloat(els.mutationRate.value) / 100;

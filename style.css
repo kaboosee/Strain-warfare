@@ -79,6 +79,7 @@ html, body {
 
 /* ---------- stage / canvas ---------- */
 .stage {
+  position: relative;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -164,6 +165,35 @@ input[type="range"]::-moz-range-thumb {
 .btn.drug-cipro        { border-color: var(--cip); box-shadow: inset 3px 0 0 var(--cip); }
 .btn-danger { color: var(--danger); border-color: var(--danger); }
 .btn-ghost  { background: transparent; color: var(--text-dim); }
+.btn.active { background: var(--accent); color: #07120f; border-color: var(--accent); }
+
+/* ---------- MEGA-plate gradient control ---------- */
+.gradient-control {
+  margin: 10px 0 8px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+}
+.gradient-control label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.gradient-control select {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 7px 8px;
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.gradient-control .btn { margin-bottom: 0; }
 
 /* ---------- legend ---------- */
 .legend-list {
@@ -260,6 +290,41 @@ input[type="range"]::-moz-range-thumb {
 .drug-cipro        { background: var(--cip); }
 
 .muted { color: var(--text-dim); font-size: 0.76rem; margin: 12px 0 0; }
+
+/* ---------- live chart ---------- */
+.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0f141c;
+}
+
+/* ---------- cell inspector tooltip ---------- */
+.tooltip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 150px;
+  max-width: 230px;
+  padding: 8px 10px;
+  background: rgba(16, 20, 28, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.tooltip[hidden] { display: none; }
+.tooltip .tip-title {
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 5px;
+  font-size: 0.76rem;
+}
+.tooltip div { display: flex; justify-content: space-between; gap: 10px; line-height: 1.5; }
+.tooltip div b { color: var(--text); font-weight: 600; text-align: right; }
 
 /* ---------- ledger ---------- */
 .ledger-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
