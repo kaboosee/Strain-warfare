@@ -69,7 +69,16 @@ const CONFIG = {
   eatRadius: 11,           // center-to-center distance at which a cell consumes a nutrient
 
   // genetics (mutationRate set live from slider, as a fraction 0..1 per division)
-  mutationRate: 0.02,
+  mutationRate: 0.01,        // chance per gene, per division, to GAIN a resistance (de novo)
+  backMutationRate: 0.01,    // chance per carried gene, per division, to LOSE it (reversion)
+
+  // --- RESISTANCE ECOLOGY (why resistance isn't a free one-way ratchet) ---
+  // Without a standing cost, resistance only ever turns on (mutation + HGT) and never pays
+  // for itself, so it monotonically fixes at 100% pan-resistance and floods stop mattering.
+  // resistanceCost makes every carried gene burn extra metabolism EVERY second, drug or not,
+  // so resistance is selected AGAINST when no antibiotic is present and only sweeps under
+  // active drug pressure. (Distinct from effluxCost, which is paid only under a flood.)
+  resistanceCost: 2.0,       // extra energy/sec PER resistance gene, always-on (base decay is 4)
 
   // HGT / plasmids
   plasmidDropChance: 0.55,  // chance a resistant cell drops a plasmid on death
@@ -129,6 +138,13 @@ function randomDishPoint(margin = 8) {
 
 function hasAnyResistance(b) {
   return b.resistanceGenes.penicillin || b.resistanceGenes.tetracycline || b.resistanceGenes.cipro;
+}
+
+// How many resistance genes a cell carries (0..3) — drives the standing fitness cost.
+function countGenes(b) {
+  return (b.resistanceGenes.penicillin ? 1 : 0)
+       + (b.resistanceGenes.tetracycline ? 1 : 0)
+       + (b.resistanceGenes.cipro ? 1 : 0);
 }
 
 // Blend a bacterium's color from the resistance genes it carries.
@@ -314,7 +330,11 @@ function update(dt) {
 
     // metabolism + aging
     b.age += dt;
-    b.energy -= CONFIG.energyDecayPerSec * dt;
+    // baseline metabolism + standing fitness cost of carrying resistance (paid EVERY second,
+    // drug or not). This is what stops resistance from ratcheting to 100% absent selection;
+    // it is separate from effluxCost, which only applies while a flood is active.
+    const geneCount = countGenes(b);
+    b.energy -= (CONFIG.energyDecayPerSec + geneCount * CONFIG.resistanceCost) * dt;
     if (b.efflux > 0) b.efflux = Math.max(0, b.efflux - dt * 2);
 
     // antibiotic exposure
@@ -363,11 +383,15 @@ function update(dt) {
     if (b.energy >= CONFIG.divideThreshold && state.bacteria.length + births.length < CONFIG.maxPopulation) {
       const childGenes = { ...b.resistanceGenes };
 
-      // mutation roll per gene
+      // mutation roll per gene: gain a resistance (de novo) or lose one (reversion).
+      // Back-mutation lets resistance decay once drug pressure is gone, instead of only
+      // ever accumulating.
       for (const gene of GENES) {
         if (!childGenes[gene] && Math.random() < CONFIG.mutationRate) {
           childGenes[gene] = true;
           state.mutationsThisWindow++;
+        } else if (childGenes[gene] && Math.random() < CONFIG.backMutationRate) {
+          childGenes[gene] = false;
         }
       }
 
@@ -555,7 +579,7 @@ function cacheEls() {
     'simSpeed', 'simSpeedVal',
     'btnSpawn', 'btnPenicillin', 'btnTetracycline', 'btnCipro',
     'btnClearPlasmids', 'btnReset', 'btnPause',
-    'statLiving', 'statResistant', 'statPlasmids', 'statNutrients', 'statTick',
+    'statLiving', 'statResistant', 'statMultiResistant', 'statPlasmids', 'statNutrients', 'statTick',
     'barPen', 'barTet', 'barCip', 'cntPen', 'cntTet', 'cntCip',
     'ledger',
   ].forEach(id => { els[id] = document.getElementById(id); });
@@ -578,26 +602,35 @@ function addLedger(msg, kind = 'info') {
 // ---- stats ----
 function updateStats() {
   const living = state.bacteria.length;
-  let resistant = 0, pen = 0, tet = 0, cip = 0;
+  // Per-gene counts (a multi-resistant cell is counted in every gene it carries — this is
+  // the "who survives drug X" number). `resistant` = carries >=1 gene; `multi` = carries >=2.
+  // So pen+tet+cip can exceed `resistant`; the Multi-resistant stat explains that gap.
+  let resistant = 0, multi = 0, pen = 0, tet = 0, cip = 0;
   for (const b of state.bacteria) {
-    if (hasAnyResistance(b)) resistant++;
-    if (b.resistanceGenes.penicillin) pen++;
-    if (b.resistanceGenes.tetracycline) tet++;
-    if (b.resistanceGenes.cipro) cip++;
+    let genes = 0;
+    if (b.resistanceGenes.penicillin)   { pen++; genes++; }
+    if (b.resistanceGenes.tetracycline) { tet++; genes++; }
+    if (b.resistanceGenes.cipro)        { cip++; genes++; }
+    if (genes >= 1) resistant++;
+    if (genes >= 2) multi++;
   }
   els.statLiving.textContent = living;
   els.statResistant.textContent = resistant;
+  els.statMultiResistant.textContent = multi;
   els.statPlasmids.textContent = state.plasmids.length;
   els.statNutrients.textContent = state.nutrients.length;
   els.statTick.textContent = `Tick ${state.tick} · Gen ${state.generation} · ${fpsEMA.toFixed(0)} FPS`;
 
+  // Bars and labels are share-of-colony (% of living), NOT share of the Resistant total —
+  // the "count · %" label makes that explicit.
   const denom = Math.max(living, 1);
+  const pct = n => Math.round((n / denom) * 100);
   els.barPen.style.width = `${(pen / denom) * 100}%`;
   els.barTet.style.width = `${(tet / denom) * 100}%`;
   els.barCip.style.width = `${(cip / denom) * 100}%`;
-  els.cntPen.textContent = pen;
-  els.cntTet.textContent = tet;
-  els.cntCip.textContent = cip;
+  els.cntPen.textContent = `${pen} · ${pct(pen)}%`;
+  els.cntTet.textContent = `${tet} · ${pct(tet)}%`;
+  els.cntCip.textContent = `${cip} · ${pct(cip)}%`;
 }
 
 // ---- actions ----
@@ -617,6 +650,9 @@ function floodAntibiotic(gene) {
   state.floods.push(createFlood(gene));
   const a = ANTIBIOTICS[gene];
   addLedger(`💉 Flooded ${a.name} (targets ${a.target}). Susceptible cells dying.`, 'flood');
+  // Snap the stats panel to the new reality immediately — otherwise the 15-tick refresh
+  // can lag the fast flood die-off by up to ~0.25 s right after the user acts.
+  updateStats();
 }
 
 function clearPlasmids() {

@@ -20,9 +20,9 @@
 
         <div class="control">
           <label for="mutationRate">
-            Mutation Rate <span class="val" id="mutationRateVal">2.0%</span>
+            Mutation Rate <span class="val" id="mutationRateVal">1.0%</span>
           </label>
-          <input type="range" id="mutationRate" min="0" max="20" step="0.1" value="2" />
+          <input type="range" id="mutationRate" min="0" max="3" step="0.1" value="1" />
         </div>
 
         <div class="control">
@@ -75,15 +75,19 @@
         <h2>Live Stats</h2>
         <div class="stat-grid">
           <div class="stat"><span class="stat-num" id="statLiving">0</span><span class="stat-label">Living</span></div>
-          <div class="stat"><span class="stat-num" id="statResistant">0</span><span class="stat-label">Resistant</span></div>
+          <div class="stat"><span class="stat-num" id="statResistant">0</span><span class="stat-label">Resistant <span class="stat-hint">(≥1 gene)</span></span></div>
+          <div class="stat"><span class="stat-num" id="statMultiResistant">0</span><span class="stat-label">Multi-resistant <span class="stat-hint">(≥2 genes)</span></span></div>
           <div class="stat"><span class="stat-num" id="statPlasmids">0</span><span class="stat-label">Plasmids</span></div>
           <div class="stat"><span class="stat-num" id="statNutrients">0</span><span class="stat-label">Nutrients</span></div>
         </div>
 
+        <h3 class="breakdown-title">Resistance by gene</h3>
+        <p class="caption">Cells carrying each gene, as count · % of colony. Multi-resistant
+          cells appear in more than one row, so these <em>sum to more than</em> the Resistant total.</p>
         <div class="bar-list" id="resistanceBreakdown">
-          <div class="bar-row"><span>Penicillin-R</span><div class="bar"><i class="drug-penicillin" id="barPen"></i></div><span class="bar-val" id="cntPen">0</span></div>
-          <div class="bar-row"><span>Tetracycline-R</span><div class="bar"><i class="drug-tetracycline" id="barTet"></i></div><span class="bar-val" id="cntTet">0</span></div>
-          <div class="bar-row"><span>Cipro-R</span><div class="bar"><i class="drug-cipro" id="barCip"></i></div><span class="bar-val" id="cntCip">0</span></div>
+          <div class="bar-row"><span>Penicillin</span><div class="bar"><i class="drug-penicillin" id="barPen"></i></div><span class="bar-val" id="cntPen">0 · 0%</span></div>
+          <div class="bar-row"><span>Tetracycline</span><div class="bar"><i class="drug-tetracycline" id="barTet"></i></div><span class="bar-val" id="cntTet">0 · 0%</span></div>
+          <div class="bar-row"><span>Cipro</span><div class="bar"><i class="drug-cipro" id="barCip"></i></div><span class="bar-val" id="cntCip">0 · 0%</span></div>
         </div>
         <p class="muted" id="statTick">Tick 0 · Gen 0 · — FPS</p>
       </section>

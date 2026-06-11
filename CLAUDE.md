@@ -49,7 +49,12 @@ The file is organised into 10 numbered, commented sections:
 - **Reproduction**: `divideThreshold` (energy at which a cell divides — the trigger) and
   `reproEfficiency` (fraction of energy kept across division; 1.0 = conserved). Division
   splits the parent's energy evenly between the two daughters.
-- **Genetics**: `mutationRate` (fraction per gene per division; driven live by the slider).
+- **Genetics**: `mutationRate` (chance per gene per division to GAIN resistance; driven live
+  by the slider, max 3%), `backMutationRate` (chance per carried gene per division to LOSE it
+  — lets resistance decay once pressure is gone).
+- **Resistance ecology**: `resistanceCost` (extra metabolism PER carried gene EVERY second,
+  drug or not). This is the standing fitness cost that keeps resistance rare absent selection;
+  it is distinct from `effluxCost`, which is only paid under an active flood.
 - **HGT/plasmids**: `plasmidDropChance`, `plasmidLifespan`, `plasmidPickupRadius`.
 - **Floods**: `floodDuration`, `floodSweep` (seconds for the front to cross), `floodDamage`
   (energy/s drained from susceptible cells), `effluxCost` (tax resistant cells pay).
@@ -62,6 +67,16 @@ The file is organised into 10 numbered, commented sections:
 - **flood**: `{ gene, age, front, duration, sweep, casualties }`
 
 ## Known gotchas
+- **Resistance must be COSTLY or it becomes a one-way ratchet to 100% pan-resistance.**
+  Genes only turn on via mutation + HGT; with no standing cost, carrying resistance is free
+  when no drug is present, so resistance can only accumulate and monotonically fixes
+  (confirmed: every gene → 100% by ~gen 1000, even at low mutation). The fix is BOTH a
+  per-gene `resistanceCost` paid every second (selection against resistance without drugs)
+  AND a sane mutation rate (slider capped at 3%, not 20%); `backMutationRate` additionally
+  lets resistance decay. **If late-game floods stop mattering, check `resistanceCost` first.**
+  Verified headless: no-flood @1% mutation keeps each gene <15% over 1000+ gens, a penicillin
+  flood leaves pen-resistant survivors that recover toward ~100% pen-R while others stay low,
+  and max mutation does not pan-fix all three.
 - **Foraging, not supply, was the real "bacteria die off" bug.** Cells use a random walk;
   with heavy `drag` (0.86) the velocity damped to ~0 each tick, so cells sat nearly still
   (~4 px/s), ate almost nothing, never divided (`generation` stayed 0), and died at the

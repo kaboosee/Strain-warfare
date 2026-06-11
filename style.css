@@ -213,9 +213,29 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .bar-list { display: flex; flex-direction: column; gap: 8px; }
+.breakdown-title {
+  margin: 14px 0 4px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+.caption {
+  margin: 0 0 10px;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: #6f7a89;
+}
+.stat-hint {
+  display: block;
+  font-size: 0.62rem;
+  color: #6f7a89;
+  text-transform: none;
+  letter-spacing: 0;
+}
 .bar-row {
   display: grid;
-  grid-template-columns: 92px 1fr 34px;
+  grid-template-columns: 78px 1fr 62px;
   align-items: center;
   gap: 8px;
   font-size: 0.76rem;
@@ -242,11 +262,14 @@ input[type="range"]::-moz-range-thumb {
 .muted { color: var(--text-dim); font-size: 0.76rem; margin: 12px 0 0; }
 
 /* ---------- ledger ---------- */
-.ledger-panel { flex: 1; min-height: 220px; display: flex; flex-direction: column; }
+.ledger-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ledger {
   flex: 1;
+  min-height: 0;               /* allow the flex child to shrink so overflow scrolls */
   overflow-y: auto;
-  max-height: 360px;
+  overflow-x: hidden;
+  /* viewport-relative cap so the panel never runs off the bottom of the page */
+  max-height: min(360px, 40vh);
   font-family: "Cascadia Code", "Consolas", monospace;
   font-size: 0.74rem;
   line-height: 1.5;
@@ -254,7 +277,7 @@ input[type="range"]::-moz-range-thumb {
   flex-direction: column;
   gap: 2px;
 }
-.ledger .entry { color: var(--text-dim); }
+.ledger .entry { color: var(--text-dim); overflow-wrap: anywhere; }
 .ledger .entry .t { color: #5c6675; margin-right: 6px; }
 .ledger .entry.mut  { color: var(--accent); }
 .ledger .entry.flood{ color: var(--tet); }
