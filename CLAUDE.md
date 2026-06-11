@@ -23,7 +23,8 @@ The file is organised into 10 numbered, commented sections:
 3. **Utilities** — `rand`, `clamp`, `dist2`, `randomDishPoint`, `hasAnyResistance`, `bacteriumColor`.
 4. **Entity factories** — `createBacterium`, `createNutrient`, `createPlasmid`, `createFlood`.
 5. **Spatial hash** — `SpatialGrid` class; two instances `nutrientGrid`, `plasmidGrid`.
-6. **Simulation step** — `update(dt)`: movement, eating, HGT, floods, reproduction, death.
+6. **Simulation step** — `update(dt)`: movement (random walk + chemotaxis toward the
+   nearest sensed nutrient), eating, HGT, floods, reproduction, death.
 7. **Rendering** — `render()`: dish, flood overlays, nutrients, plasmids, bacteria.
 8. **Game loop** — `frame()`: fixed-step accumulator (`fixedDt = 1/60`), ~60 FPS.
 9. **UI wiring** — `cacheEls`, `addLedger`, `updateStats`, action fns, `bindUI`.
@@ -35,6 +36,16 @@ The file is organised into 10 numbered, commented sections:
   `eatRadius`. Carrying capacity identity:
   **`N* = (nutrientRate * nutrientEnergy) / energyDecayPerSec`**. Defaults give
   `(30*30)/4 = 225`; start population is 60, so the colony grows then self-limits.
+  **Caveat: this identity assumes cells actually consume the nutrients they're fed.
+  It's an upper bound — if cells can't reach the food (see Movement), realised capacity
+  is far lower and the colony starves even though the global supply looks adequate.**
+- **Movement / foraging** (the thing that makes feeding actually happen):
+  `drag` (velocity retention per step — keep ~0.97; low values like 0.86 damp velocity to
+  ~zero each tick so cells barely move and can't feed), `jitter` (random-walk acceleration),
+  `maxSpeed`, `chemotaxis` (acceleration bias toward the nearest sensed nutrient), and
+  `senseRadius` (how far a cell can "smell" food). Chemotaxis is what turns the random walk
+  into directed foraging — without it (or with heavy drag) cells diffuse too slowly to eat,
+  never divide, and the colony dies regardless of how much food is spawned.
 - **Reproduction**: `divideThreshold` (energy at which a cell divides — the trigger) and
   `reproEfficiency` (fraction of energy kept across division; 1.0 = conserved). Division
   splits the parent's energy evenly between the two daughters.
@@ -51,10 +62,26 @@ The file is organised into 10 numbered, commented sections:
 - **flood**: `{ gene, age, front, duration, sweep, casualties }`
 
 ## Known gotchas
-- **The energy economy is sensitive.** Changing any of `startEnergy`, `energyDecayPerSec`,
+- **Foraging, not supply, was the real "bacteria die off" bug.** Cells use a random walk;
+  with heavy `drag` (0.86) the velocity damped to ~0 each tick, so cells sat nearly still
+  (~4 px/s), ate almost nothing, never divided (`generation` stayed 0), and died at the
+  starvation/lifespan mark — even though nutrients piled up to the `maxNutrients` cap
+  uneaten. Fix was movement-side: `drag`→0.97, add `chemotaxis`/`senseRadius` so cells swim
+  toward food, and a modest `eatRadius` bump. **If the colony is dying, check whether cells
+  are moving and feeding before you touch the energy/supply numbers.** The carrying-capacity
+  identity is reassuring but irrelevant if cells never reach the food.
+- **The energy economy is also sensitive.** Changing any of `startEnergy`, `energyDecayPerSec`,
   `nutrientEnergy`, or `nutrientRate` shifts the carrying-capacity identity above and can
   flip the colony between "starves out" and "instantly hits `maxPopulation`". Re-derive
-  `N*` before/after any change. (This file's earlier bug was exactly this: supply < demand.)
+  `N*` before/after any change.
+- **ALWAYS verify balance changes by running the sim, not by reasoning alone.** The cheap,
+  reliable check is a headless harness: load `app.js` in a Node `vm` context with stubbed
+  DOM globals (`document.getElementById` returning fake slider/element objects, `requestAnimationFrame`
+  a no-op, a `ctx` Proxy), append `globalThis.__sim = { state, CONFIG, update, spawnBacteria, ... }`
+  so you can reach the `const`-scoped internals, seed the world, then step `update(1/60)` for
+  ~60 simulated seconds. **Confirm `generation` climbs above 0 within a few seconds and the
+  un-flooded population sustains itself** (and that a flood collapses it to resistant-only
+  survivors). `node --check app.js` only catches syntax, not extinction.
 - **Floods sweep by X-POSITION, not radially.** A cell is "under" a drug once
   `b.x <= flood.front * CONFIG.size`. The leading edge moves left→right over `floodSweep`
   seconds. Both `update()` (damage) and `render()` (overlay) rely on this same rule.

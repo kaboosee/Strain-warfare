@@ -58,11 +58,15 @@ const CONFIG = {
   energyDecayPerSec: 4,    // baseline metabolism — energy out per cell per second
   jitter: 26,              // random-walk acceleration (px/s^2-ish)
   maxSpeed: 34,            // px/s
-  drag: 0.86,
+  drag: 0.97,             // velocity-retention per step. CRITICAL: low values (e.g. 0.86)
+                          //   damp velocity to ~zero each tick so cells barely move and
+                          //   cannot forage. ~0.97 lets motion persist so they actually feed.
+  chemotaxis: 14,         // accel bias toward the nearest sensed nutrient (foraging drive)
+  senseRadius: 26,        // how far a cell can "smell" a nutrient to swim toward it
   lifespanMin: 14,         // seconds
   lifespanMax: 30,
   nutrientEnergy: 30,      // energy gained per nutrient eaten
-  eatRadius: 8,            // center-to-center distance at which a cell consumes a nutrient
+  eatRadius: 11,           // center-to-center distance at which a cell consumes a nutrient
 
   // genetics (mutationRate set live from slider, as a fraction 0..1 per division)
   mutationRate: 0.02,
@@ -266,6 +270,25 @@ function update(dt) {
     // random walk
     b.vx += rand(-CONFIG.jitter, CONFIG.jitter) * dt * 8;
     b.vy += rand(-CONFIG.jitter, CONFIG.jitter) * dt * 8;
+
+    // chemotaxis: swim toward the nearest nutrient within sense range so cells
+    // actively forage instead of drifting. This is what makes feeding (and thus
+    // reproduction) actually happen — pure diffusion leaves cells nearly static.
+    {
+      const sensed = nutrientGrid.queryNearby(b.x, b.y);
+      let best = null, bestD = CONFIG.senseRadius * CONFIG.senseRadius;
+      for (const n of sensed) {
+        if (n.eaten) continue;
+        const d = dist2(b.x, b.y, n.x, n.y);
+        if (d < bestD) { bestD = d; best = n; }
+      }
+      if (best) {
+        const d = Math.sqrt(bestD) || 1;
+        b.vx += ((best.x - b.x) / d) * CONFIG.chemotaxis * dt * 8;
+        b.vy += ((best.y - b.y) / d) * CONFIG.chemotaxis * dt * 8;
+      }
+    }
+
     b.vx *= CONFIG.drag;
     b.vy *= CONFIG.drag;
     const sp = Math.hypot(b.vx, b.vy);
@@ -578,10 +601,14 @@ function updateStats() {
 }
 
 // ---- actions ----
-function spawnBacteria(n = CONFIG.spawnBatch) {
+function spawnBacteria(n = CONFIG.spawnBatch, staggerAge = false) {
   for (let i = 0; i < n && state.bacteria.length < CONFIG.maxPopulation; i++) {
     const p = randomDishPoint();
-    state.bacteria.push(createBacterium(p.x, p.y));
+    const b = createBacterium(p.x, p.y);
+    // Stagger founder ages so the whole seed cohort doesn't hit its lifespan and
+    // die in the same few seconds (which caused a deep early population crash).
+    if (staggerAge) b.age = rand(0, b.lifespan * 0.6);
+    state.bacteria.push(b);
   }
   addLedger(`Spawned ${n} bacteria into the dish.`, 'info');
 }
@@ -610,7 +637,7 @@ function resetSim() {
   els.ledger.innerHTML = '';
   // seed
   for (let i = 0; i < 40; i++) { const p = randomDishPoint(); state.nutrients.push(createNutrient(p.x, p.y)); }
-  spawnBacteria(CONFIG.startPopulation);
+  spawnBacteria(CONFIG.startPopulation, true);
   addLedger('Simulation reset. A fresh colony begins.', 'info');
   updateStats();
 }
@@ -675,7 +702,7 @@ function init() {
 
   // seed world
   for (let i = 0; i < 40; i++) { const p = randomDishPoint(); state.nutrients.push(createNutrient(p.x, p.y)); }
-  spawnBacteria(CONFIG.startPopulation);
+  spawnBacteria(CONFIG.startPopulation, true);
   addLedger('Welcome to the AMR Evolution Sandbox. Selection pressure awaits.', 'info');
 
   lastTime = performance.now();
