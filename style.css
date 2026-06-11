@@ -1,0 +1,279 @@
+/* ============================================================
+   AMR Evolution Sandbox — dark theme, responsive layout
+   ============================================================ */
+
+:root {
+  --bg: #0e1116;
+  --bg-2: #11161f;
+  --panel: #1a1f29;
+  --panel-2: #222936;
+  --border: #2c3340;
+  --text: #e6eaf0;
+  --text-dim: #9aa4b2;
+  --accent: #5eead4;
+
+  /* per-drug accents */
+  --pen: #4ea3ff;   /* Penicillin — blue */
+  --tet: #ffb648;   /* Tetracycline — amber */
+  --cip: #e472ff;   /* Ciprofloxacin — magenta */
+  --danger: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: radial-gradient(1200px 800px at 50% -10%, #161c27 0%, var(--bg) 60%);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  font-size: 14px;
+}
+
+.app-header {
+  padding: 14px 24px 6px;
+  text-align: center;
+}
+.app-header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: 0.5px;
+}
+.subtitle {
+  margin: 2px 0 0;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+/* ---------- layout grid ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+  padding: 12px 18px 24px;
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---------- panels ---------- */
+.panel {
+  background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+}
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--accent);
+}
+
+/* ---------- stage / canvas ---------- */
+.stage {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+#dish {
+  width: 100%;
+  max-width: 800px;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  border-radius: 50%;
+  background: #0b0e13;
+  border: 1px solid var(--border);
+  box-shadow: 0 0 0 6px #0a0d12, 0 14px 40px rgba(0,0,0,0.55),
+              inset 0 0 60px rgba(0,0,0,0.6);
+  cursor: crosshair;
+}
+
+/* ---------- controls ---------- */
+.control { margin-bottom: 14px; }
+.control:last-child { margin-bottom: 0; }
+.control label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.82rem;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+}
+.control .val {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #0b0e13;
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #0b0e13;
+  cursor: pointer;
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 9px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: transform 0.05s ease, filter 0.15s ease, background 0.15s ease;
+  text-align: left;
+}
+.btn:last-child { margin-bottom: 0; }
+.btn:hover { filter: brightness(1.18); }
+.btn:active { transform: translateY(1px); }
+
+.btn.drug-penicillin   { border-color: var(--pen); box-shadow: inset 3px 0 0 var(--pen); }
+.btn.drug-tetracycline { border-color: var(--tet); box-shadow: inset 3px 0 0 var(--tet); }
+.btn.drug-cipro        { border-color: var(--cip); box-shadow: inset 3px 0 0 var(--cip); }
+.btn-danger { color: var(--danger); border-color: var(--danger); }
+.btn-ghost  { background: transparent; color: var(--text-dim); }
+
+/* ---------- legend ---------- */
+.legend-list {
+  list-style: none;
+  margin: 0; padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.legend-list li { display: flex; align-items: center; gap: 8px; }
+.swatch {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+.swatch.ring { background: transparent; border: 2px solid var(--accent); }
+.swatch.glow { background: #7fbf7f; box-shadow: 0 0 7px 3px rgba(94,234,212,0.8); }
+
+/* ---------- stats ---------- */
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.stat {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: center;
+}
+.stat-num {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+}
+
+.bar-list { display: flex; flex-direction: column; gap: 8px; }
+.bar-row {
+  display: grid;
+  grid-template-columns: 92px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+.bar {
+  height: 8px;
+  background: var(--panel-2);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 5px;
+  transition: width 0.3s ease;
+}
+.bar-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+.drug-penicillin   { background: var(--pen); }
+.drug-tetracycline { background: var(--tet); }
+.drug-cipro        { background: var(--cip); }
+
+.muted { color: var(--text-dim); font-size: 0.76rem; margin: 12px 0 0; }
+
+/* ---------- ledger ---------- */
+.ledger-panel { flex: 1; min-height: 220px; display: flex; flex-direction: column; }
+.ledger {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 360px;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ledger .entry { color: var(--text-dim); }
+.ledger .entry .t { color: #5c6675; margin-right: 6px; }
+.ledger .entry.mut  { color: var(--accent); }
+.ledger .entry.flood{ color: var(--tet); }
+.ledger .entry.hgt  { color: var(--cip); }
+.ledger .entry.wipe { color: var(--danger); }
+.ledger .entry.info { color: var(--text-dim); }
+.ledger::-webkit-scrollbar { width: 8px; }
+.ledger::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 1100px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .stage { order: -1; }
+  .sidebar { flex-direction: row; flex-wrap: wrap; }
+  .sidebar .panel { flex: 1 1 240px; }
+  .ledger { max-height: 200px; }
+}
+@media (max-width: 620px) {
+  .sidebar { flex-direction: column; }
+}

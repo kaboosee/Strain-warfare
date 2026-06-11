@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AMR Evolution Sandbox</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>🧫 AMR Evolution Sandbox</h1>
+    <p class="subtitle">Watch antimicrobial resistance evolve under selection pressure</p>
+  </header>
+
+  <main class="layout">
+    <!-- ============ LEFT SIDEBAR: CONTROLS ============ -->
+    <aside class="sidebar sidebar-left">
+      <section class="panel">
+        <h2>Parameters</h2>
+
+        <div class="control">
+          <label for="mutationRate">
+            Mutation Rate <span class="val" id="mutationRateVal">2.0%</span>
+          </label>
+          <input type="range" id="mutationRate" min="0" max="20" step="0.1" value="2" />
+        </div>
+
+        <div class="control">
+          <label for="nutrientRate">
+            Nutrient Spawn Rate <span class="val" id="nutrientRateVal">6/s·k</span>
+          </label>
+          <input type="range" id="nutrientRate" min="0" max="40" step="1" value="6" />
+        </div>
+
+        <div class="control">
+          <label for="simSpeed">
+            Sim Speed <span class="val" id="simSpeedVal">1.0×</span>
+          </label>
+          <input type="range" id="simSpeed" min="0" max="4" step="0.25" value="1" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Actions</h2>
+        <button class="btn" id="btnSpawn">＋ Spawn Bacteria</button>
+        <button class="btn drug-penicillin" id="btnPenicillin">💉 Flood Penicillin</button>
+        <button class="btn drug-tetracycline" id="btnTetracycline">💉 Flood Tetracycline</button>
+        <button class="btn drug-cipro" id="btnCipro">💉 Flood Ciprofloxacin</button>
+        <button class="btn btn-ghost" id="btnClearPlasmids">🧹 Clear Plasmids</button>
+        <button class="btn btn-danger" id="btnReset">↺ Reset Sim</button>
+        <button class="btn btn-ghost" id="btnPause">⏸ Pause</button>
+      </section>
+
+      <section class="panel legend">
+        <h2>Legend</h2>
+        <ul class="legend-list">
+          <li><span class="swatch" style="background:#7fbf7f"></span> Susceptible</li>
+          <li><span class="swatch" style="background:#4ea3ff"></span> Penicillin-R</li>
+          <li><span class="swatch" style="background:#ffb648"></span> Tetracycline-R</li>
+          <li><span class="swatch" style="background:#e472ff"></span> Cipro-R</li>
+          <li><span class="swatch ring"></span> Floating plasmid</li>
+          <li><span class="swatch glow"></span> Efflux active</li>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- ============ CANVAS ============ -->
+    <section class="stage">
+      <canvas id="dish" width="800" height="800"></canvas>
+    </section>
+
+    <!-- ============ RIGHT SIDEBAR: STATS + LEDGER ============ -->
+    <aside class="sidebar sidebar-right">
+      <section class="panel">
+        <h2>Live Stats</h2>
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-num" id="statLiving">0</span><span class="stat-label">Living</span></div>
+          <div class="stat"><span class="stat-num" id="statResistant">0</span><span class="stat-label">Resistant</span></div>
+          <div class="stat"><span class="stat-num" id="statPlasmids">0</span><span class="stat-label">Plasmids</span></div>
+          <div class="stat"><span class="stat-num" id="statNutrients">0</span><span class="stat-label">Nutrients</span></div>
+        </div>
+
+        <div class="bar-list" id="resistanceBreakdown">
+          <div class="bar-row"><span>Penicillin-R</span><div class="bar"><i class="drug-penicillin" id="barPen"></i></div><span class="bar-val" id="cntPen">0</span></div>
+          <div class="bar-row"><span>Tetracycline-R</span><div class="bar"><i class="drug-tetracycline" id="barTet"></i></div><span class="bar-val" id="cntTet">0</span></div>
+          <div class="bar-row"><span>Cipro-R</span><div class="bar"><i class="drug-cipro" id="barCip"></i></div><span class="bar-val" id="cntCip">0</span></div>
+        </div>
+        <p class="muted" id="statTick">Tick 0 · Gen 0 · — FPS</p>
+      </section>
+
+      <section class="panel ledger-panel">
+        <h2>Event Ledger</h2>
+        <div class="ledger" id="ledger"></div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
